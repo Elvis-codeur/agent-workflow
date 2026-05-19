@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Architectural invariants ─────────────────────────────────────────────
+  # Runs first as a fast gating signal. No language dependencies.
+  invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-invariants.sh
+
+  # ── Python ────────────────────────────────────────────────────────────────
+  # Uncomment if your project uses Python (uv workspace).
+  #
+  # python:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: astral-sh/setup-uv@v3
+  #       with:
+  #         enable-cache: true
+  #     - run: uv sync --all-packages --group dev
+  #     - name: ruff format check
+  #       run: uv run ruff format --check .
+  #     - name: ruff lint
+  #       run: uv run ruff check .
+  #     - name: mypy
+  #       run: uv run mypy
+  #     - name: pytest
+  #       run: uv run pytest -x
+
+  # ── TypeScript / JavaScript ───────────────────────────────────────────────
+  # Uncomment if your project uses a pnpm workspace.
+  # Adjust the --filter value to match your app package name.
+  #
+  # frontend:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: pnpm/action-setup@v4
+  #       with:
+  #         version: 9
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 20
+  #         cache: pnpm
+  #     - run: pnpm install --frozen-lockfile
+  #     - name: biome check
+  #       run: pnpm exec biome check .
+  #     - name: typecheck
+  #       run: pnpm --filter @yourscope/app typecheck
+  #     - name: build
+  #       run: pnpm --filter @yourscope/app build
+  #     - name: test
+  #       run: pnpm --filter @yourscope/app test
+
+  # ── Rust ──────────────────────────────────────────────────────────────────
+  # Uncomment if your project uses Rust.
+  # Adjust the --manifest-path to your Cargo.toml location.
+  #
+  # rust:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         components: rustfmt, clippy
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: cargo fmt
+  #       run: cargo fmt --manifest-path Cargo.toml --check
+  #     - name: cargo clippy
+  #       run: cargo clippy -- -D warnings
+
+  # ── Conventional Commits ──────────────────────────────────────────────────
+  # Validates every commit message in the PR. Only runs on pull_request.
+  commit-lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: webiny/action-conventional-commits@v1.3.0
