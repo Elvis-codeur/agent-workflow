@@ -8,7 +8,26 @@
 #
 # Safe to re-run: existing files are not overwritten unless --force is passed.
 
-set -euo pipefail
+set -eo pipefail
+
+REPO_URL="https://github.com/Elvis-codeur/agent-workflow.git"
+CLONED_DIR=""
+
+# ── Locate the boilerplate source ─────────────────────────────────────────────
+# When run via `curl | bash`, BASH_SOURCE[0] is empty or "/dev/stdin" — there
+# are no local files to copy from. Clone the repo to a temp dir instead.
+_src="${BASH_SOURCE[0]:-}"
+if [[ -z "$_src" || "$_src" == "/dev/stdin" || "$_src" == "bash" ]]; then
+    echo "Detected curl-pipe mode — cloning agent-workflow..."
+    CLONED_DIR="$(mktemp -d)"
+    git clone --depth=1 "$REPO_URL" "$CLONED_DIR" >/dev/null 2>&1
+    SCRIPT_DIR="$CLONED_DIR"
+else
+    SCRIPT_DIR="$(cd "$(dirname "$_src")" && pwd)"
+fi
+
+TEMPLATES="$SCRIPT_DIR/templates"
+SKILLS_SRC="$SCRIPT_DIR/skills"
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 FORCE=false
@@ -23,10 +42,6 @@ done
 
 TARGET="${TARGET:-.}"
 TARGET="$(cd "$TARGET" && pwd)"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATES="$SCRIPT_DIR/templates"
-SKILLS_SRC="$SCRIPT_DIR/skills"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
@@ -139,3 +154,8 @@ Next steps:
   5. Write your first progress file:
        → Use /write-progress or follow docs/agent-rules/skills/write-progress/SKILL.md
 EOF
+
+# ── Cleanup temp clone (curl-pipe mode) ──────────────────────────────────────
+if [[ -n "$CLONED_DIR" ]]; then
+    rm -rf "$CLONED_DIR"
+fi
