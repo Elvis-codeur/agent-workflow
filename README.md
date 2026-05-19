@@ -21,15 +21,13 @@ Provides:
 ## Install into a project
 
 ```bash
-# Into the current directory:
-curl -fsSL https://raw.githubusercontent.com/Elvis-codeur/agent-workflow/main/install.sh | bash
+# Recommended — clone and run (always works, no CDN caching issues):
+git clone --depth=1 https://github.com/Elvis-codeur/agent-workflow.git /tmp/aw
+bash /tmp/aw/install.sh /path/to/myproject   # or . for current directory
+rm -rf /tmp/aw
 
-# Into a specific directory:
+# Convenience one-liner (may serve a cached script for a few minutes after updates):
 curl -fsSL https://raw.githubusercontent.com/Elvis-codeur/agent-workflow/main/install.sh | bash -s -- /path/to/myproject
-
-# Or clone and run locally:
-git clone https://github.com/Elvis-codeur/agent-workflow.git
-./agent-workflow/install.sh /path/to/myproject
 ```
 
 The script is safe to re-run — it will not overwrite files you have already customised unless you pass `--force`.
