@@ -1,0 +1,156 @@
+# Template — rendered by scripts/aw-run before each run.
+# Placeholders ({{...}}) are substituted; everything else is real workflow YAML.
+#
+# Reference: https://github.com/coleam00/Archon — see .claude/docs/workflow-yaml-reference.md
+
+name: aw-master-loop-{{RUN_ID}}
+description: |
+  Use when: User wants to drive a single epic from a progress.*.yaml file to
+  `complete` status without supervising the coder/tester ping-pong.
+  Triggers: "implement epic", "run epic", "aw master loop".
+  Does: master agent reads the epic, dispatches the coder sub-agent (loop until
+  review), then the tester sub-agent (write tests + run them). On test failure
+  it loops the coder through /fix-blocked up to {{MAX_FIX_ATTEMPTS}} times.
+  If the two sub-agents still disagree, the master arbitrates; if unsure it
+  asks the human.
+  NOT for: multi-epic planning (use /write-progress first), green-field
+  scaffolding, or merging PRs.
+
+# Master defaults — per-node overrides below take precedence.
+provider: {{MASTER_PROVIDER}}
+model: {{MASTER_MODEL}}
+
+nodes:
+  # ---------------------------------------------------------------- master
+  - id: read-epic
+    prompt: |
+      Read the epic with id "$ARGUMENTS" from the project's progress.*.yaml
+      files. Output strictly the following JSON:
+
+        { "epic_id": "...", "scope": "frontend|backend|...",
+          "implementation_paths": [...], "tests_paths": [...],
+          "implementation_acceptance": "...", "tests_acceptance": "...",
+          "spec_section": "..." }
+
+      Do not edit any file.
+    allowed_tools: ["Read", "Grep", "Glob"]
+    output_format:
+      type: object
+      required: [epic_id, scope, implementation_paths, tests_paths]
+      properties:
+        epic_id: { type: string }
+        scope: { type: string }
+        implementation_paths: { type: array, items: { type: string } }
+        tests_paths: { type: array, items: { type: string } }
+        implementation_acceptance: { type: string }
+        tests_acceptance: { type: string }
+        spec_section: { type: string }
+
+  # ---------------------------------------------------------------- coder
+  - id: implement
+    depends_on: [read-epic]
+    provider: {{CODER_PROVIDER}}
+    model: {{CODER_MODEL}}
+    loop:
+      until: REVIEW_READY
+      max_iterations: {{MAX_IMPL_ITERATIONS}}
+      fresh_context: false
+    prompt: |
+      You are the coder-agent. Run the /implement-epic skill on epic
+      "$read-epic.output.epic_id". Implementation paths:
+      $read-epic.output.implementation_paths.
+      When the epic is marked `review` in the progress file and all gates pass,
+      emit <promise>REVIEW_READY</promise> on its own line. Do not write tests.
+
+  # ---------------------------------------------------------------- tester (write)
+  - id: write-tests
+    depends_on: [implement]
+    provider: {{TESTER_PROVIDER}}
+    model: {{TESTER_MODEL}}
+    context: fresh
+    prompt: |
+      You are the tester-agent in Mode A (write-tests). Run /test-and-progress
+      Mode A on epic "$read-epic.output.epic_id". Write the files at
+      $read-epic.output.tests_paths. Do NOT run tests. Do NOT update status.
+
+  # ---------------------------------------------------------------- tester (run)
+  - id: run-tests
+    depends_on: [write-tests]
+    bash: |
+      bash scripts/aw-run-tests.sh "$read-epic.output.scope" \
+                                    "$read-epic.output.epic_id"
+    timeout: 600000
+
+  # ---------------------------------------------------------------- coder fix loop
+  - id: fix-blocked
+    depends_on: [run-tests]
+    when: "$run-tests.output != 'PASS'"
+    provider: {{CODER_PROVIDER}}
+    model: {{CODER_MODEL}}
+    loop:
+      until: REVIEW_READY
+      max_iterations: {{MAX_FIX_ATTEMPTS}}
+      fresh_context: false
+    prompt: |
+      You are the coder-agent. Run /fix-blocked on epic
+      "$read-epic.output.epic_id". The tester reported:
+
+      $run-tests.output
+
+      Fix ONLY implementation files. When gates pass and the epic is back to
+      `review`, emit <promise>REVIEW_READY</promise>.
+
+  - id: rerun-tests
+    depends_on: [fix-blocked]
+    when: "$run-tests.output != 'PASS'"
+    bash: |
+      bash scripts/aw-run-tests.sh "$read-epic.output.scope" \
+                                    "$read-epic.output.epic_id"
+    timeout: 600000
+
+  # ---------------------------------------------------------------- master arbitration
+  - id: arbitrate
+    depends_on: [rerun-tests]
+    when: "$rerun-tests.output != 'PASS'"
+    # master provider/model inherited from top level
+    prompt: |
+      Coder and tester disagree on epic "$read-epic.output.epic_id".
+      Latest test output:
+
+      $rerun-tests.output
+
+      Read the epic acceptance criteria, the diff (`git diff`), and the last
+      `review:` and `blocked:` notes in the progress file. Decide who is right.
+      Output strict JSON.
+    allowed_tools: ["Read", "Grep", "Glob", "Bash"]
+    output_format:
+      type: object
+      required: [verdict, rationale]
+      properties:
+        verdict:
+          type: string
+          enum: [coder_right, tester_right, unsure]
+        rationale: { type: string }
+        confidence: { type: number }
+
+  - id: ask-human
+    depends_on: [arbitrate]
+    when: "$arbitrate.output.verdict == 'unsure'"
+    loop:
+      until: HUMAN_DECIDED
+      max_iterations: 1
+      fresh_context: false
+    prompt: |
+      The master agent could not decide. Present the situation to the human
+      and ask them to pick `coder_right` or `tester_right`. When they answer,
+      emit <promise>HUMAN_DECIDED</promise>.
+    # interactive surface — Archon pauses for stdin
+    # (loop+max_iterations:1 is the current idiom for one-shot interactive)
+
+  # ---------------------------------------------------------------- commit
+  - id: commit
+    depends_on: [run-tests, rerun-tests]
+    trigger_rule: one_success
+    when: "$run-tests.output == 'PASS' || $rerun-tests.output == 'PASS'"
+    prompt: |
+      Run the /commit skill. Do NOT push. Do NOT open a PR.
