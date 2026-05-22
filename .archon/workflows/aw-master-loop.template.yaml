@@ -148,9 +148,11 @@ nodes:
     # (loop+max_iterations:1 is the current idiom for one-shot interactive)
 
   # ---------------------------------------------------------------- commit
+  # >>> AUTOCOMMIT (stripped by scripts/aw-run when --no-autocommit)
   - id: commit
     depends_on: [run-tests, rerun-tests]
     trigger_rule: one_success
     when: "$run-tests.output == 'PASS' || $rerun-tests.output == 'PASS'"
     prompt: |
       Run the /commit skill. Do NOT push. Do NOT open a PR.
+  # <<< AUTOCOMMIT

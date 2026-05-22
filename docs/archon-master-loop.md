@@ -107,16 +107,22 @@ docs/
 └── archon-master-loop.md                 # this file
 ```
 
-## Open decisions (need user input)
+## Defaults (locked)
 
-1. **Default models.** What should `aw-run` pick when a flag is omitted?
-   Current placeholder: master = `pi:kiro/minimax-m2-5`, coder = `claude:sonnet`,
-   tester = `codex:gpt-5-codex`.
-2. **Max fix-attempts before arbitration.** Default 3 — confirm?
-3. **Should `commit` be inside the workflow or left to the human?** The
-   existing `/commit` skill is strict about gates; running it autonomously is
-   safe, but you may want a manual final review. Current plan: commit is
-   inside, but the workflow stops before `git push` and never opens a PR
-   unless explicitly asked.
-4. **Worktree cleanup.** Archon keeps worktrees around by default; should
-   `aw-run` auto-run `archon complete <branch>` on success?
+| Role | Default | Override flag |
+|---|---|---|
+| master | `claude:sonnet` (Sonnet 4.6) | `--master PROVIDER:MODEL` |
+| coder | `codex:gpt-5-codex` | `--coder PROVIDER:MODEL` |
+| tester | `claude:sonnet` (Sonnet 4.6) | `--tester PROVIDER:MODEL` |
+| max fix attempts before arbitration | `3` | `--max-fix-attempts N` |
+| autocommit on green | **on** | `--no-autocommit` |
+| worktree cleanup on success | **on** | `--keep-worktree` |
+
+The autocommit node never pushes and never opens a PR — it only runs the
+`/commit` skill (lint → typecheck → test → stage → conventional commit).
+When `--no-autocommit` is passed, `scripts/aw-run` strips the commit node
+from the rendered workflow between the `>>> AUTOCOMMIT` / `<<< AUTOCOMMIT`
+markers in the template.
+
+Worktree cleanup runs `archon complete <branch>` only when the workflow exits
+zero; on failure the worktree is preserved so you can inspect it.

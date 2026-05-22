@@ -6,38 +6,50 @@
 #   scripts/aw-run [options] <EPIC-ID>
 #
 # Options:
-#   --coder    PROVIDER:MODEL           (default: claude:sonnet)
-#   --tester   PROVIDER:MODEL           (default: codex:gpt-5-codex)
-#   --master   PROVIDER:MODEL           (default: pi:kiro/minimax-m2-5)
+#   --coder    PROVIDER:MODEL           (default: codex:gpt-5-codex)
+#   --tester   PROVIDER:MODEL           (default: claude:sonnet)
+#   --master   PROVIDER:MODEL           (default: claude:sonnet)
 #   --max-impl-iterations N             (default: 10)
 #   --max-fix-attempts   N              (default: 3)
 #   --branch BRANCH                     (default: archon/epic-<EPIC-ID>)
+#   --no-autocommit                     skip the in-workflow commit node
+#   --keep-worktree                     do not run `archon complete` on success
 #   --dry-run                           render YAML and print path; do not run
 #
 # PROVIDER must be one of: pi, claude, codex.
+#
+# Defaults match the project policy: master = claude sonnet 4.6, coder =
+# gpt-5-codex, tester = claude sonnet 4.6. Override per-run with the flags
+# above. Autocommit and worktree cleanup are ON by default.
 
 set -euo pipefail
 
-CODER="claude:sonnet"
-TESTER="codex:gpt-5-codex"
-MASTER="pi:kiro/minimax-m2-5"
+CODER="codex:gpt-5-codex"
+TESTER="claude:sonnet"
+MASTER="claude:sonnet"
 MAX_IMPL=10
 MAX_FIX=3
 BRANCH=""
 DRY=0
+AUTOCOMMIT=1
+CLEAN_WORKTREE=1
+
+usage() { sed -n '2,25p' "$0"; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --coder)              CODER="$2"; shift 2 ;;
-        --tester)             TESTER="$2"; shift 2 ;;
-        --master)             MASTER="$2"; shift 2 ;;
+        --coder)               CODER="$2"; shift 2 ;;
+        --tester)              TESTER="$2"; shift 2 ;;
+        --master)              MASTER="$2"; shift 2 ;;
         --max-impl-iterations) MAX_IMPL="$2"; shift 2 ;;
-        --max-fix-attempts)   MAX_FIX="$2"; shift 2 ;;
-        --branch)             BRANCH="$2"; shift 2 ;;
-        --dry-run)            DRY=1; shift ;;
-        -h|--help)            sed -n '2,20p' "$0"; exit 0 ;;
+        --max-fix-attempts)    MAX_FIX="$2"; shift 2 ;;
+        --branch)              BRANCH="$2"; shift 2 ;;
+        --no-autocommit)       AUTOCOMMIT=0; shift ;;
+        --keep-worktree)       CLEAN_WORKTREE=0; shift ;;
+        --dry-run)             DRY=1; shift ;;
+        -h|--help)             usage; exit 0 ;;
         --) shift; break ;;
-        -*) echo "unknown flag: $1" >&2; exit 2 ;;
+        -*) echo "unknown flag: $1" >&2; usage >&2; exit 2 ;;
         *)  EPIC="$1"; shift ;;
     esac
 done
@@ -55,7 +67,8 @@ TEMPLATE="$REPO_ROOT/.archon/workflows/aw-master-loop.template.yaml"
 RUNS_DIR="$REPO_ROOT/.archon/workflows/.runs"
 mkdir -p "$RUNS_DIR"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${EPIC//[^A-Za-z0-9]/_}"
-OUT="$RUNS_DIR/aw-master-loop-$RUN_ID.yaml"
+WF_NAME="aw-master-loop-$RUN_ID"
+OUT="$RUNS_DIR/$WF_NAME.yaml"
 
 sed \
     -e "s|{{RUN_ID}}|$RUN_ID|g" \
@@ -69,15 +82,33 @@ sed \
     -e "s|{{MAX_FIX_ATTEMPTS}}|$MAX_FIX|g" \
     "$TEMPLATE" > "$OUT"
 
+if [[ "$AUTOCOMMIT" -eq 0 ]]; then
+    # strip the commit node block between the AUTOCOMMIT markers
+    sed -i '/>>> AUTOCOMMIT/,/<<< AUTOCOMMIT/d' "$OUT"
+fi
+
 echo "rendered → $OUT"
-echo "  coder  = $CODER_PROV / $CODER_MDL"
-echo "  tester = $TESTER_PROV / $TESTER_MDL"
-echo "  master = $MASTER_PROV / $MASTER_MDL"
-echo "  branch = $BRANCH"
+echo "  coder       = $CODER_PROV / $CODER_MDL"
+echo "  tester      = $TESTER_PROV / $TESTER_MDL"
+echo "  master      = $MASTER_PROV / $MASTER_MDL"
+echo "  branch      = $BRANCH"
+echo "  autocommit  = $AUTOCOMMIT"
+echo "  cleanup     = $CLEAN_WORKTREE"
 
 if [[ "$DRY" -eq 1 ]]; then
     exit 0
 fi
 
-archon validate workflows "aw-master-loop-$RUN_ID"
-exec archon workflow run "aw-master-loop-$RUN_ID" "$EPIC" --branch "$BRANCH"
+archon validate workflows "$WF_NAME"
+
+set +e
+archon workflow run "$WF_NAME" "$EPIC" --branch "$BRANCH"
+RC=$?
+set -e
+
+if [[ "$RC" -eq 0 && "$CLEAN_WORKTREE" -eq 1 ]]; then
+    echo "workflow succeeded — cleaning worktree for $BRANCH"
+    archon complete "$BRANCH" || echo "warning: 'archon complete' failed; clean up manually" >&2
+fi
+
+exit "$RC"
