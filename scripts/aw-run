@@ -133,7 +133,6 @@ sed \
     -e "s|{{MAX_FIX_ATTEMPTS}}|$MAX_FIX|g" \
     -e "s|{{SKIP_IMPLEMENT}}|$SKIP_IMPLEMENT|g" \
     -e "s|{{SKIP_WRITE_TESTS}}|$SKIP_WRITE_TESTS|g" \
-    -e "s|{{CONFIGURE_FLAGS}}|$([ "$SKIP_IMPLEMENT" = true ] && printf '%s' '--skip-implement '; [ "$SKIP_WRITE_TESTS" = true ] && printf '%s' '--skip-write-tests')|g" \
     "$TEMPLATE" > "$OUT"
 
 if [[ "$AUTOCOMMIT" -eq 0 ]]; then
