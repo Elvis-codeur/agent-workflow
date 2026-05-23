@@ -58,6 +58,7 @@ nodes:
     depends_on: [read-epic]
     provider: {{CODER_PROVIDER}}
     model: {{CODER_MODEL}}
+    idle_timeout: 120000
     prompt: |
       You are the coder-agent for epic "$read-epic.output.epic_id".
 
@@ -89,6 +90,7 @@ nodes:
     provider: {{TESTER_PROVIDER}}
     model: {{TESTER_MODEL}}
     context: fresh
+    idle_timeout: 120000
     prompt: |
       You are the tester-agent for epic "$read-epic.output.epic_id" (Mode A).
 
@@ -122,6 +124,7 @@ nodes:
     when: "$run-tests.output != 'PASS'"
     provider: {{CODER_PROVIDER}}
     model: {{CODER_MODEL}}
+    idle_timeout: 120000
     prompt: |
       You are the coder-agent. Epic "$read-epic.output.epic_id" has failing tests.
 
@@ -149,6 +152,7 @@ nodes:
     depends_on: [rerun-tests]
     when: "$rerun-tests.output != 'PASS'"
     # master provider/model inherited from top level
+    idle_timeout: 120000
     prompt: |
       Run the /aw-master-loop skill on epic "$read-epic.output.epic_id".
       Coder and tester disagree after retries.
@@ -197,6 +201,7 @@ nodes:
     depends_on: [run-tests, rerun-tests]
     trigger_rule: one_success
     when: "$run-tests.output == 'PASS' || $rerun-tests.output == 'PASS'"
+    idle_timeout: 120000
     prompt: |
       Run the /commit skill. Do NOT push. Do NOT open a PR.
   # <<< AUTOCOMMIT

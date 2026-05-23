@@ -53,7 +53,9 @@ wrapper:
 ```
 scripts/aw-run \
     --coder claude:sonnet \
-    --tester pi:github-copilot/claude-sonnet-4.6 \
+    --tester pi:github-copilot/gpt-5.3-codex  (coder)
+github-copilot/gemini-3-flash-preview  (tester)
+github-copilot/gpt-5.2  (master) \
     --master pi:kiro/minimax-m2-5 \
     --max-fix-attempts 3 \
     EPIC-AUTH-001
@@ -111,16 +113,24 @@ docs/
 
 | Role | Default | Override flag |
 |---|---|---|
-| master | `pi:github-copilot/claude-sonnet-4.6` | `--master PROVIDER:MODEL` |
-| coder  | `pi:github-copilot/claude-sonnet-4.6` | `--coder PROVIDER:MODEL` |
-| tester | `pi:github-copilot/claude-sonnet-4.6` | `--tester PROVIDER:MODEL` |
+| master | `pi:github-copilot/gpt-5.3-codex  (coder)
+github-copilot/gemini-3-flash-preview  (tester)
+github-copilot/gpt-5.2  (master)` | `--master PROVIDER:MODEL` |
+| coder  | `pi:github-copilot/gpt-5.3-codex  (coder)
+github-copilot/gemini-3-flash-preview  (tester)
+github-copilot/gpt-5.2  (master)` | `--coder PROVIDER:MODEL` |
+| tester | `pi:github-copilot/gpt-5.3-codex  (coder)
+github-copilot/gemini-3-flash-preview  (tester)
+github-copilot/gpt-5.2  (master)` | `--tester PROVIDER:MODEL` |
 | max fix attempts before arbitration | `3` | `--max-fix-attempts N` |
 | autocommit on green | **on** | `--no-autocommit` |
 | worktree cleanup on success | **on** | `--keep-worktree` |
 | base branch for new worktree | repo default (main) | `--from-branch BRANCH` |
 
 **Pi model ref format**: `pi:<catalog-provider>/<model-id>`, e.g.
-`pi:github-copilot/claude-sonnet-4.6`, `pi:openai/gpt-4o`,
+`pi:github-copilot/gpt-5.3-codex  (coder)
+github-copilot/gemini-3-flash-preview  (tester)
+github-copilot/gpt-5.2  (master)`, `pi:openai/gpt-4o`,
 `pi:google/gemini-2.5-pro`, `pi:openrouter/qwen/qwen3-coder`.
 `aw-run` validates the format and exits 2 with a clear error if the `/`
 is missing.
@@ -167,7 +177,9 @@ name. `aw-run` validates this and exits 2 with an actionable error:
 ```
 error: --coder model 'sonnet' is not a valid Pi model ref.
   Pi requires format: <catalog-provider>/<model-id>
-  Examples: github-copilot/claude-sonnet-4.6  openai/gpt-4o  google/gemini-2.5-pro
+  Examples: github-copilot/gpt-5.3-codex  (coder)
+github-copilot/gemini-3-flash-preview  (tester)
+github-copilot/gpt-5.2  (master)  openai/gpt-4o  google/gemini-2.5-pro
 ```
 
 Find your catalog provider in `~/.pi/agent/settings.json` →
