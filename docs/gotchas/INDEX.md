@@ -9,6 +9,8 @@
 | ID | Title | Severity | Status | Scope | Discovered |
 |----|-------|----------|--------|-------|-----------|
 | [GOTCHA-001](GOTCHA-001-pi-bash-exit-1.md) | GOTCHA-001 — Pi bash tool reports grep exit 1 (no matches) as a tool failure | low | mitigated | "**/*" | 2026-05-23 |
+| [GOTCHA-002](GOTCHA-002-archon-double-quote-node-output.md) | GOTCHA-002 — Wrapping Archon `$node.output` in double-quotes breaks bash when the value contains `"` | medium | mitigated | ".archon/workflows/*.yaml.tmpl", "scripts/aw-decide.sh" | 2026-05-23 |
+| [GOTCHA-003](GOTCHA-003-archon-worktree-no-uv-sync.md) | GOTCHA-003 — Archon worktree venv has no packages installed; pytest sees `ModuleNotFoundError` → xfail | medium | mitigated | "scripts/aw-test-*.sh" | 2026-05-23 |
 
 <!-- generated:start -->
 <!-- generated:end -->

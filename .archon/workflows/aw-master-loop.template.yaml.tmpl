@@ -174,10 +174,14 @@ nodes:
     depends_on: [run-tests, rerun-tests, arbitrate, ask-human, commit]
     trigger_rule: all_done
     bash: |
-      bash scripts/aw-decide.sh "$read-epic.output.epic_id" \
-                                 "$run-tests.output" \
-                                 "$rerun-tests.output" \
-                                 "done" \
-                                 "$arbitrate.output" \
-                                 "$ask-human.output"
+      # Do NOT double-quote these: Archon already single-quotes each substituted
+      # value. Wrapping in "..." causes "'{json}" where the first '"' inside
+      # the JSON prematurely closes the outer double-quote and breaks bash.
+      bash scripts/aw-decide.sh \
+        $read-epic.output.epic_id \
+        $run-tests.output \
+        $rerun-tests.output \
+        done \
+        $arbitrate.output \
+        $ask-human.output
     timeout: 30000
