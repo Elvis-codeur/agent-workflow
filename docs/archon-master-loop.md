@@ -19,7 +19,7 @@ scripts/aw-run BE-31
 # Run with non-default models
 scripts/aw-run \
   --coder  pi:github-copilot/claude-sonnet-4.6 \
-  --tester pi:github-copilot/gemini-3-flash-preview \
+  --tester pi:github-copilot/gpt-5.3-codex \
   --master pi:github-copilot/gpt-5.2 \
   BE-31
 
@@ -77,8 +77,8 @@ session load on the GitHub Copilot tier.
 
 | Role | Default | Rationale |
 |---|---|---|
-| coder | `pi:github-copilot/gpt-5.3-codex` | Code-optimised, 400K ctx, highest throughput |
-| tester | `pi:github-copilot/gemini-3-flash-preview` | Fastest model; test-writing needs less reasoning |
+| coder | `pi:github-copilot/claude-sonnet-4.6` | Strong coding ability, 1M ctx |
+| tester | `pi:github-copilot/gpt-5.3-codex` | Different model from coder = independent signal; code-optimised |
 | master | `pi:github-copilot/gpt-5.2` | Strong reasoning; only runs on arbitration (rare) |
 | max fix attempts | `3` | `--max-fix-attempts N` |
 | max arbitration attempts | `3` | `--max-arbitration-attempts N` |

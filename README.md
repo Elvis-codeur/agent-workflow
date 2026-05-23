@@ -103,13 +103,13 @@ scripts/aw-run-all.sh --from BE-37
 # Override models per-run
 scripts/aw-run \
   --coder  pi:github-copilot/gpt-5.3-codex \
-  --tester pi:github-copilot/gemini-3-flash-preview \
+  --tester pi:github-copilot/gpt-5.3-codex \
   BE-31
 ```
 
 **Defaults** (chosen for throughput, not just capability):
 - coder: `pi:github-copilot/gpt-5.3-codex` — code-optimised, 400K context
-- tester: `pi:github-copilot/gemini-3-flash-preview` — fastest model, sufficient for test writing
+- tester: `pi:github-copilot/gpt-5.3-codex` — fastest model, sufficient for test writing
 - master: `pi:github-copilot/gpt-5.2` — strong reasoning, used only for arbitration
 
 **Phase-skip flags** (save tokens on repeat runs):
