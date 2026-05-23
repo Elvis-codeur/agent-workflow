@@ -38,8 +38,8 @@ export default function (pi: ExtensionAPI): void {
     // only the exit code is normalised, nothing is hidden.
     event.input.command = [
       `( ${cmd}`,
-      `)`,
-      `__aw_rc=$?`,
+      ")",
+      "__aw_rc=$?",
       `[ "$__aw_rc" -le 1 ] && exit 0 || exit "$__aw_rc"`,
     ].join("\n");
   });
