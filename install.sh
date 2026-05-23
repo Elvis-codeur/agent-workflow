@@ -148,7 +148,7 @@ fi
 
 # Scripts for the master loop + gotchas index
 printf "\n  Scripts:\n"
-for s in aw-run aw-run-tests.sh gotchas-index.sh; do
+for s in aw-run aw-run-tests.sh aw-decide.sh gotchas-index.sh; do
     if [[ -f "$SCRIPTS_SRC/$s" ]]; then
         copy_file "$SCRIPTS_SRC/$s" "$TARGET/scripts/$s"
         chmod +x "$TARGET/scripts/$s"
@@ -160,6 +160,11 @@ printf "\n  Symlinks:\n"
 make_symlink "$TARGET/.claude/skills"          "../docs/agent-rules/skills"
 make_symlink "$TARGET/.opencode/commands"      "../docs/agent-rules/skills"
 make_symlink "$TARGET/.pi/skills"              "../docs/agent-rules/skills"
+
+# Pi settings (only if not present; never overwrites a user's tuning)
+if [[ -f "$TEMPLATES/.pi/settings.json" ]]; then
+    copy_file "$TEMPLATES/.pi/settings.json" "$TARGET/.pi/settings.json"
+fi
 
 # ── Post-install instructions ─────────────────────────────────────────────────
 printf "\n${GREEN}Done.${NC}\n\n"

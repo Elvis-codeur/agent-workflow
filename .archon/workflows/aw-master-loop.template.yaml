@@ -170,3 +170,19 @@ nodes:
     prompt: |
       Run the /commit skill. Do NOT push. Do NOT open a PR.
   # <<< AUTOCOMMIT
+
+  # ---------------------------------------------------------------- decide (loop driver)
+  # Final node. Reads upstream outcomes and writes a one-word state to
+  # .archon/state/iterate-decision-<epic> so scripts/aw-run can decide whether
+  # to recurse, cleanup, or hard-fail. Always runs (trigger_rule: all_done).
+  - id: decide
+    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, commit]
+    trigger_rule: all_done
+    bash: |
+      bash scripts/aw-decide.sh "$read-epic.output.epic_id" \
+                                 "$run-tests.output" \
+                                 "$rerun-tests.output" \
+                                 "done" \
+                                 "$arbitrate.output" \
+                                 "$ask-human.output"
+    timeout: 30000

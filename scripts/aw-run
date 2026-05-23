@@ -108,15 +108,43 @@ archon validate workflows "$WF_NAME"
 
 mkdir -p "$REPO_ROOT/.archon/state"
 export MAX_ARBITRATION_ATTEMPTS="$MAX_ARB"
+MARKER="$REPO_ROOT/.archon/state/iterate-decision-${EPIC//[^A-Za-z0-9]/_}"
+rm -f "$MARKER"
 
-set +e
-archon workflow run "$WF_NAME" "$EPIC" --branch "$BRANCH"
-RC=$?
-set -e
+# ── Loop: each iteration is one Archon DAG run. The workflow's final
+# `decide` node writes CONVERGED / EXHAUSTED / ITERATE / FAILED to MARKER;
+# we read it after each run and loop or break accordingly.
+ITER=0
+RC=0
+while : ; do
+    ITER=$((ITER+1))
+    if [[ "$ITER" -eq 1 ]]; then
+        WT_FLAG=(--branch "$BRANCH")
+    else
+        WT_FLAG=(--no-worktree)
+    fi
+    echo "=== aw-run iteration $ITER ==="
+    set +e
+    archon workflow run "$WF_NAME" "$EPIC" "${WT_FLAG[@]}"
+    RC=$?
+    set -e
+    STATE="$(cat "$MARKER" 2>/dev/null || echo UNKNOWN)"
+    echo "  iteration $ITER finished: rc=$RC state=$STATE"
+    case "$STATE" in
+        CONVERGED) RC=0; break ;;
+        EXHAUSTED) RC=42; break ;;   # BLOCKED-ARBITRATION-EXHAUSTED
+        ITERATE)   continue ;;
+        *)         break ;;          # FAILED / UNKNOWN -> exit with archon's RC
+    esac
+done
 
 if [[ "$RC" -eq 0 && "$CLEAN_WORKTREE" -eq 1 ]]; then
-    echo "workflow succeeded — cleaning worktree for $BRANCH"
+    echo "workflow converged after $ITER iteration(s) — cleaning worktree for $BRANCH"
     archon complete "$BRANCH" || echo "warning: 'archon complete' failed; clean up manually" >&2
+elif [[ "$RC" -eq 42 ]]; then
+    echo "BLOCKED-ARBITRATION-EXHAUSTED after $ITER iteration(s) — worktree $BRANCH preserved for human review" >&2
+else
+    echo "workflow failed (rc=$RC) after $ITER iteration(s) — worktree $BRANCH preserved" >&2
 fi
 
 exit "$RC"
