@@ -170,7 +170,9 @@ find_branch() {
   local epic_id="$1"
   local safe
   safe="$(echo "$epic_id" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
-  git branch --list "*${safe}*" | head -1 | tr -d ' *'
+  # --format strips the leading `+ ` / `* ` worktree/HEAD markers that
+  # `tr -d ' *'` would miss (the `+` for linked-worktree branches).
+  git branch --list --format='%(refname:short)' "*${safe}*" | head -1
 }
 
 # Merge a completed branch to main (with or without a live worktree),

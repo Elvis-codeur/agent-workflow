@@ -19,7 +19,16 @@
 #   $6 ask-human output    (the human's final word; "" if not run)
 set -euo pipefail
 
-EPIC="${1:?epic id required}"
+# When read-epic upstream returns empty JSON (model rate-limited / silent
+# failure), every $node.output substitution becomes empty string and we land
+# here with EPIC="". Surface a clear diagnostic and propagate FAILED so the
+# DAG aborts cleanly (rather than the bash :? error which is unhelpful).
+EPIC="${1:-}"
+if [[ -z "$EPIC" ]]; then
+  echo "aw-decide: epic id missing — upstream read-epic likely returned empty output" >&2
+  echo "FAILED"
+  exit 1
+fi
 RUN_OUT="${2:-}"
 RERUN_OUT="${3:-}"
 COMMIT_STATUS="${4:-}"
