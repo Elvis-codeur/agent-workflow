@@ -53,7 +53,7 @@ wrapper:
 ```
 scripts/aw-run \
     --coder claude:sonnet \
-    --tester pi:sonnet \
+    --tester pi:github-copilot/claude-sonnet-4.6 \
     --master pi:kiro/minimax-m2-5 \
     --max-fix-attempts 3 \
     EPIC-AUTH-001
@@ -111,12 +111,19 @@ docs/
 
 | Role | Default | Override flag |
 |---|---|---|
-| master | `pi:sonnet` | `--master PROVIDER:MODEL` |
-| coder  | `pi:sonnet` | `--coder PROVIDER:MODEL` |
-| tester | `pi:sonnet` | `--tester PROVIDER:MODEL` |
+| master | `pi:github-copilot/claude-sonnet-4.6` | `--master PROVIDER:MODEL` |
+| coder  | `pi:github-copilot/claude-sonnet-4.6` | `--coder PROVIDER:MODEL` |
+| tester | `pi:github-copilot/claude-sonnet-4.6` | `--tester PROVIDER:MODEL` |
 | max fix attempts before arbitration | `3` | `--max-fix-attempts N` |
 | autocommit on green | **on** | `--no-autocommit` |
 | worktree cleanup on success | **on** | `--keep-worktree` |
+| base branch for new worktree | repo default (main) | `--from-branch BRANCH` |
+
+**Pi model ref format**: `pi:<catalog-provider>/<model-id>`, e.g.
+`pi:github-copilot/claude-sonnet-4.6`, `pi:openai/gpt-4o`,
+`pi:google/gemini-2.5-pro`, `pi:openrouter/qwen/qwen3-coder`.
+`aw-run` validates the format and exits 2 with a clear error if the `/`
+is missing.
 
 The autocommit node never pushes and never opens a PR — it only runs the
 `/commit` skill (lint → typecheck → test → stage → conventional commit).
