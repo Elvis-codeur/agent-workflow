@@ -15,8 +15,8 @@ cd "$ROOT"
 
 # Ensure node_modules are present (worktrees share the workspace venv
 # but pnpm links may be missing after a fresh worktree checkout).
-pnpm install --frozen-lockfile --quiet 2>/dev/null || \
-  pnpm install --quiet 2>/dev/null || true
+pnpm install --frozen-lockfile --quiet &>/dev/null || \
+  pnpm install --quiet &>/dev/null || true
 
 TMPOUT=$(mktemp)
 
