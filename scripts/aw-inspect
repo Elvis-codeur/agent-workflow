@@ -121,7 +121,7 @@ def show_cost(run, events):
             name = d.get('tool_name', '?')
             tool_counts[name] = tool_counts.get(name, 0) + 1
     if tool_counts:
-        print(f"\n  Tool calls: {', '.join(f'{k}×{v}' for k,v in sorted(tool_counts.items(), key=lambda x:-x[1]))}")
+        print(f"\n  Tool calls: {', '.join(f'{k}x{v}' for k,v in sorted(tool_counts.items(), key=lambda x:-x[1]))}")
 
 def show_events(events):
     """Print full event log."""
