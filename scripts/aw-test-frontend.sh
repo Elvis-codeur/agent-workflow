@@ -2,7 +2,7 @@
 # aw-test-frontend.sh — project-specific frontend test runner for general-simulator.
 # Called by scripts/aw-run-tests.sh when scope=frontend.
 # Outputs bare "PASS" on stdout when the frontend vitest suite passes;
-# exits non-zero with full vitest output on failure.
+# always exits 0; failure detected by stdout content (!= PASS).
 #
 # Pre-existing failures from PLANNED (not yet implemented) epics are
 # expected — the arbitrate node will classify them correctly.
@@ -31,5 +31,5 @@ else
   # can read the error detail from $run-tests.output.
   cat "$TMPOUT"
   rm -f "$TMPOUT"
-  exit 1
+  # (exit 0 implicitly — failure detected by content, not exit code)
 fi
