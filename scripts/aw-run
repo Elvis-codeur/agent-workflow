@@ -181,6 +181,22 @@ while : ; do
     archon workflow run "$WF_NAME" "$EPIC" "${WT_FLAG[@]}" 2>&1 | tee /tmp/aw-run-archon-$$.log
     RC=${PIPESTATUS[0]}
     set -e
+    # Auto-recover from "Workflow already active on this path" by abandoning the
+    # stale run (orphaned by a previous interrupted aw-run) and retrying once.
+    if [[ "$RC" -ne 0 ]] && grep -q "Workflow already active on this path" /tmp/aw-run-archon-$$.log; then
+        STALE_ID="$(grep -oE 'run \`[a-f0-9]{8}' /tmp/aw-run-archon-$$.log | head -1 | grep -oE '[a-f0-9]{8}')"
+        if [[ -n "$STALE_ID" ]]; then
+            FULL_ID="$(archon workflow status 2>/dev/null | grep -oE "${STALE_ID}[a-f0-9]+" | head -1)"
+            if [[ -n "$FULL_ID" ]]; then
+                echo "  ⚠  Found stale active run $STALE_ID; abandoning and retrying…"
+                archon workflow abandon "$FULL_ID" 2>&1 | tail -2
+                set +e
+                archon workflow run "$WF_NAME" "$EPIC" "${WT_FLAG[@]}" 2>&1 | tee /tmp/aw-run-archon-$$.log
+                RC=${PIPESTATUS[0]}
+                set -e
+            fi
+        fi
+    fi
     STATE="$(cat "$MARKER" 2>/dev/null || echo UNKNOWN)"
     # Fallback: if archon reported success but decide's marker didn't reach us
     # (e.g. marker written to worktree before the aw-decide.sh fix), trust archon.
