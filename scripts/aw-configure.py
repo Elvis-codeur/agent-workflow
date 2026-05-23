@@ -26,7 +26,6 @@ Modes:
 
 import argparse
 import json
-import os
 import pathlib
 import sys
 
@@ -65,7 +64,7 @@ def main() -> None:
     p.add_argument("epic_id")
     p.add_argument("scope")
     p.add_argument("tests_paths_json")
-    p.add_argument("--skip-implement",   action="store_true", default=False)
+    p.add_argument("--skip-implement", action="store_true", default=False)
     p.add_argument("--skip-write-tests", action="store_true", default=False)
     args = p.parse_args()
 
@@ -80,20 +79,24 @@ def main() -> None:
     except Exception:
         root = pathlib.Path.cwd()
 
-    status  = get_epic_status(root, args.epic_id)
+    status = get_epic_status(root, args.epic_id)
     t_exist = all_tests_exist(root, args.tests_paths_json)
 
     # --- compute skip flags ---
     # Auto-detect: implementation is complete if status is review or complete
-    skip_impl  = args.skip_implement or status in ("review", "complete")
+    skip_impl = args.skip_implement or status in ("review", "complete")
     # Auto-detect: if we're skipping implement AND tests already exist, skip write-tests
     skip_tests = args.skip_write_tests or (skip_impl and t_exist)
 
     # --- compute human-readable mode and reason ---
-    if   skip_impl  and skip_tests:      mode = "reuse-tests"
-    elif skip_impl  and not skip_tests:  mode = "tests-only"
-    elif not skip_impl and skip_tests:   mode = "implement-only"
-    else:                                mode = "full"
+    if skip_impl and skip_tests:
+        mode = "reuse-tests"
+    elif skip_impl and not skip_tests:
+        mode = "tests-only"
+    elif not skip_impl and skip_tests:
+        mode = "implement-only"
+    else:
+        mode = "full"
 
     reasons: list[str] = []
     if args.skip_implement:
@@ -107,12 +110,12 @@ def main() -> None:
     reason = "; ".join(reasons) if reasons else "no overrides (full run)"
 
     result = {
-        "skip_implement":   str(skip_impl).lower(),    # "true" or "false"
+        "skip_implement": str(skip_impl).lower(),  # "true" or "false"
         "skip_write_tests": str(skip_tests).lower(),
-        "mode":             mode,
-        "reason":           reason,
-        "epic_status":      status,
-        "tests_exist":      str(t_exist).lower(),
+        "mode": mode,
+        "reason": reason,
+        "epic_status": status,
+        "tests_exist": str(t_exist).lower(),
     }
 
     # Emit to stderr for human visibility, then print JSON to stdout
