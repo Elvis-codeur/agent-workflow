@@ -60,6 +60,8 @@ nodes:
       $read-epic.output.implementation_paths.
       Iterate internally until the epic is marked `review` in the progress
       file and all gates pass. Do not write tests.
+      Shell tip: append `|| true` to any grep/find/ls used for existence
+      checks — Pi treats exit 1 (no matches) as a tool failure.
 
   # ---------------------------------------------------------------- tester (write)
   - id: write-tests
@@ -97,6 +99,7 @@ nodes:
       You have up to {{MAX_FIX_ATTEMPTS}} internal attempts. Fix ONLY
       implementation files. Stop when gates pass and the epic is `review`,
       OR when you've exhausted attempts (mark the epic `blocked` with notes).
+      Shell tip: append `|| true` to grep/find/ls existence checks.
 
   - id: rerun-tests
     depends_on: [fix-blocked]
