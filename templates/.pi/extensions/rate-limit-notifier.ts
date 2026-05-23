@@ -126,15 +126,9 @@ export default function (pi: ExtensionAPI): void {
         };
         hitCount++;
         const limitDesc =
-          LIMIT_DESCRIPTIONS[info.rateLimitType ?? ""] ??
-          info.rateLimitType ??
-          "unknown";
-        const resetStr = info.resetsAt
-          ? ` — resets ${formatReset(String(info.resetsAt))}`
-          : "";
-        const reason = info.overageDisabledReason
-          ? ` (${info.overageDisabledReason})`
-          : "";
+          LIMIT_DESCRIPTIONS[info.rateLimitType ?? ""] ?? info.rateLimitType ?? "unknown";
+        const resetStr = info.resetsAt ? ` — resets ${formatReset(String(info.resetsAt))}` : "";
+        const reason = info.overageDisabledReason ? ` (${info.overageDisabledReason})` : "";
         const msg = `⛔ Rate limit: ${limitDesc}${reason}${resetStr}`;
 
         ctx.ui.notify(msg, "error");
@@ -148,9 +142,7 @@ export default function (pi: ExtensionAPI): void {
           `\n${"=".repeat(60)}\n` +
             `⛔  RATE LIMIT DETECTED\n` +
             `    Type:    ${limitDesc}\n` +
-            (info.overageDisabledReason
-              ? `    Reason:  ${info.overageDisabledReason}\n`
-              : "") +
+            (info.overageDisabledReason ? `    Reason:  ${info.overageDisabledReason}\n` : "") +
             (info.resetsAt
               ? `    Resets:  ${new Date(info.resetsAt * 1000).toLocaleString()}\n`
               : "") +
@@ -197,8 +189,7 @@ function formatReset(raw: string): string {
   const minsFromNow = Math.ceil((ts * 1000 - Date.now()) / 60000);
 
   if (minsFromNow <= 0) return "now";
-  if (minsFromNow < 60)
-    return `at ${d.toLocaleTimeString()} (in ${minsFromNow} min)`;
+  if (minsFromNow < 60) return `at ${d.toLocaleTimeString()} (in ${minsFromNow} min)`;
   if (minsFromNow < 24 * 60)
     return `at ${d.toLocaleTimeString()} (in ${Math.round(minsFromNow / 60)}h)`;
   return `on ${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
