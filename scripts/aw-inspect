@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""
+aw-inspect — review what the Archon master-loop did for a given epic.
+
+Usage:
+  scripts/aw-inspect EPIC-ID [--events] [--session] [--cost]
+
+  --events    print full tool-call event log
+  --session   print path to the Pi session JSONL file (open with pi /resume)
+  --cost      show per-node cost + duration summary (default)
+
+Examples:
+  scripts/aw-inspect BE-31
+  scripts/aw-inspect FE-02 --events | less
+  pi --resume $(scripts/aw-inspect BE-31 --session)
+"""
+import sys
+import json
+import sqlite3
+import pathlib
+import argparse
+import subprocess
+
+ARCHON_DB = pathlib.Path.home() / ".archon" / "archon.db"
+PI_SESSIONS = pathlib.Path.home() / ".pi" / "agent" / "sessions"
+
+def get_db():
+    db = sqlite3.connect(ARCHON_DB)
+    db.row_factory = sqlite3.Row
+    return db
+
+def find_run(db, epic_id):
+    """Find the most recent workflow run for an epic."""
+    rows = db.execute("""
+        SELECT * FROM remote_agent_workflow_runs
+        WHERE user_message = ? OR workflow_name LIKE ?
+        ORDER BY started_at DESC LIMIT 1
+    """, (epic_id, f"%{epic_id.replace('-', '_').lower()}%")).fetchall()
+    if not rows:
+        # Try case-insensitive search
+        rows = db.execute("""
+            SELECT * FROM remote_agent_workflow_runs
+            ORDER BY started_at DESC
+        """).fetchall()
+        rows = [r for r in rows if epic_id.lower() in r['workflow_name'].lower()
+                or r['user_message'] == epic_id]
+    return rows[0] if rows else None
+
+def find_pi_session(worktree_path):
+    """Find the Pi session file for the worktree path."""
+    if not PI_SESSIONS.exists():
+        return None
+    slug = worktree_path.replace("/", "-").replace(" ", "_").lstrip("-")
+    for d in PI_SESSIONS.iterdir():
+        if slug in d.name or worktree_path.split("/")[-1] in d.name:
+            jsonls = sorted(d.glob("*.jsonl"), reverse=True)
+            if jsonls:
+                return jsonls[0]
+    # Broader search
+    epic_safe = worktree_path.split("/")[-1].lower()
+    for d in PI_SESSIONS.iterdir():
+        if epic_safe in d.name.lower():
+            jsonls = sorted(d.glob("*.jsonl"), reverse=True)
+            if jsonls:
+                return jsonls[0]
+    return None
+
+def show_cost(run, events):
+    """Print per-node cost + duration table."""
+    print(f"\n  Epic:    {run['user_message']}")
+    print(f"  Run:     {run['workflow_name']}")
+    print(f"  Status:  {run['status']}")
+    print(f"  Started: {run['started_at']}")
+    print(f"  Ended:   {run['completed_at'] or '(running)'}")
+    print()
+    print(f"  {'Node':<16} {'Status':<10} {'Duration':>10} {'Cost USD':>10}  Output preview")
+    print(f"  {'-'*16} {'-'*10} {'-'*10} {'-'*10}  {'-'*30}")
+
+    nodes = {}
+    for e in events:
+        d = json.loads(e['data']) if e['data'] else {}
+        node = e['step_name'] or 'workflow'
+        if e['event_type'] == 'node_started':
+            nodes[node] = {'status': 'running', 'cost': 0, 'duration': 0, 'output': ''}
+        elif e['event_type'] == 'node_completed':
+            nodes.setdefault(node, {})
+            nodes[node]['status'] = 'completed'
+            nodes[node]['cost'] = d.get('cost_usd') or 0
+            nodes[node]['duration'] = (d.get('duration_ms') or 0) / 1000
+            out = str(d.get('node_output', ''))
+            nodes[node]['output'] = out[:60].replace('\n', '↵')
+        elif e['event_type'] == 'node_failed':
+            nodes.setdefault(node, {})
+            nodes[node]['status'] = 'FAILED'
+            nodes[node]['duration'] = (d.get('duration_ms') or 0) / 1000
+            nodes[node]['output'] = str(d.get('error', ''))[:60]
+        elif e['event_type'] == 'node_skipped':
+            nodes.setdefault(node, {})
+            nodes[node]['status'] = f"skip({d.get('reason','')})"
+
+    total_cost = 0
+    for node, info in nodes.items():
+        cost = info.get('cost', 0)
+        total_cost += cost
+        dur = info.get('duration', 0)
+        dur_str = f"{dur:.0f}s" if dur < 120 else f"{dur/60:.1f}m"
+        cost_str = f"${cost:.4f}" if cost else "-"
+        status = info.get('status', '?')
+        out = info.get('output', '')
+        print(f"  {node:<16} {status:<10} {dur_str:>10} {cost_str:>10}  {out}")
+
+    print(f"  {'-'*16} {'-'*10} {'-'*10} {'-'*10}")
+    cost_str = f"${total_cost:.4f}" if total_cost else "(GitHub Copilot — $0)"
+    print(f"  {'TOTAL':<16} {'':10} {' ':10} {cost_str:>10}")
+
+    # Tool call counts
+    tool_counts = {}
+    for e in events:
+        if e['event_type'] == 'tool_called':
+            d = json.loads(e['data']) if e['data'] else {}
+            name = d.get('tool_name', '?')
+            tool_counts[name] = tool_counts.get(name, 0) + 1
+    if tool_counts:
+        print(f"\n  Tool calls: {', '.join(f'{k}×{v}' for k,v in sorted(tool_counts.items(), key=lambda x:-x[1]))}")
+
+def show_events(events):
+    """Print full event log."""
+    for e in events:
+        d = json.loads(e['data']) if e['data'] else {}
+        ts = e['created_at']
+        node = e['step_name'] or ''
+        etype = e['event_type']
+        if etype == 'tool_called':
+            tool = d.get('tool_name', '?')
+            inp = d.get('tool_input', {})
+            if tool == 'bash':
+                detail = inp.get('command', '')[:80].replace('\n', '↵')
+            elif tool in ('read', 'write', 'edit'):
+                detail = inp.get('path', inp.get('file_path', ''))
+            else:
+                detail = str(inp)[:80]
+            print(f"  {ts}  [{node:12s}]  {tool:8s}  {detail}")
+        elif etype in ('node_completed', 'node_failed', 'node_skipped'):
+            out = str(d.get('node_output', d.get('error', d.get('reason', '')))).replace('\n', '↵')
+            print(f"  {ts}  [{node:12s}]  {etype.upper()}  {out[:100]}")
+
+def main():
+    p = argparse.ArgumentParser(description="Inspect an Archon master-loop epic run")
+    p.add_argument('epic_id', help='Epic ID, e.g. BE-31')
+    p.add_argument('--events', action='store_true', help='Print full tool-call event log')
+    p.add_argument('--session', action='store_true', help='Print Pi session JSONL path for /resume')
+    p.add_argument('--cost', action='store_true', help='Show cost/duration per node (default)')
+    args = p.parse_args()
+
+    if not ARCHON_DB.exists():
+        print("archon.db not found at", ARCHON_DB, file=sys.stderr)
+        sys.exit(1)
+
+    db = get_db()
+    run = find_run(db, args.epic_id)
+    if not run:
+        print(f"No run found for {args.epic_id}", file=sys.stderr)
+        sys.exit(1)
+
+    events = db.execute("""
+        SELECT * FROM remote_agent_workflow_events
+        WHERE workflow_run_id = ?
+        ORDER BY created_at
+    """, (run['id'],)).fetchall()
+
+    if args.session:
+        sf = find_pi_session(run['working_path'])
+        if sf:
+            print(sf)
+        else:
+            print(f"No Pi session file found for {run['working_path']}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    if args.events:
+        show_events(events)
+        return
+
+    # Default: cost summary
+    show_cost(run, events)
+
+if __name__ == '__main__':
+    main()
