@@ -25,6 +25,7 @@ repos:
         exclude: \.md$          # markdown uses trailing spaces for line breaks
       - id: end-of-file-fixer
       - id: check-yaml
+        exclude: ^\.archon/workflows/.*\.template\.yaml$  # contains {{...}} placeholders, not valid YAML
       - id: check-json
       - id: check-toml
       - id: check-added-large-files
