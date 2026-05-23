@@ -34,33 +34,33 @@ pi --resume "$(scripts/aw-inspect BE-31 --session)"
 
 ---
 
-## DAG — 11 nodes
+## DAG — 12 nodes
 
 ```
 read-epic
-  └─► implement ──────────────────────────────────────────────────────────────┐
-        └─► write-tests                                                        │
-              └─► run-tests ──(PASS)──► commit ──► update-context ──► decide  │
-                    │                                                           │
-                    └──(FAIL)──► fix-blocked ──► rerun-tests ──(PASS)──────────┘
-                                                     │
-                                                     └──(FAIL)──► arbitrate ──► ask-human
-                                                                       │
-                                                                       └──────────────► decide
+  └─► configure ────────────────────────────────────────────────────────────┐
+        └─► implement ─(if skip_implement=false)──────────────────────────  │
+              └─► write-tests ─(if skip_write_tests=false)─────────────── │ │
+                    └─► run-tests ──(PASS)──► commit ──► update-context ──► decide
+                          │
+                          └──(FAIL)──► fix-blocked ──► rerun-tests
+                                                           │
+                                            (FAIL) ──► arbitrate ──► ask-human
 ```
 
 | Node | Type | Role | What it does |
 |---|---|---|---|
 | `read-epic` | AI (master) | reads the epic JSON from `progress.*.yaml` |
-| `implement` | AI (coder) | implements, runs gates, marks `review` |
-| `write-tests` | AI (tester, fresh context) | Mode A: writes test files, does NOT run them |
+| `configure` | bash | reads epic status + test-file presence; outputs JSON skip flags |
+| `implement` | AI (coder, **skippable**) | implements, runs gates, marks `review` |
+| `write-tests` | AI (tester, fresh ctx, **skippable**) | Mode A: writes test files |
 | `run-tests` | bash | calls `scripts/aw-run-tests.sh` → `scripts/aw-test-<scope>.sh` |
 | `fix-blocked` | AI (coder) | fixes failing tests, up to `--max-fix-attempts` attempts |
 | `rerun-tests` | bash | same as run-tests, after fix-blocked |
-| `arbitrate` | AI (master) | classifies the disagreement into one of 8 buckets, emits verdict JSON |
+| `arbitrate` | AI (master) | classifies disagreement into one of 8 buckets, emits verdict JSON |
 | `ask-human` | AI (master) | prompts the user when arbitrate returns `unsure` |
 | `commit` | AI (master) | runs `/commit` skill — never pushes, never opens a PR |
-| `update-context` | bash | regenerates `CODEBASE-SUMMARY.md` AUTO section; appends epic log line |
+| `update-context` | bash | regenerates `CODEBASE-SUMMARY.md`; appends epic log line |
 | `decide` | bash | writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED` to `.archon/state/` |
 
 `implement`, `write-tests`, `fix-blocked`, `arbitrate`, and `commit` all have
@@ -89,6 +89,51 @@ session load on the GitHub Copilot tier.
 **Pi model ref format**: `pi:<catalog-provider>/<model-id>`.  
 Run `pi list-models` to see all available models.  
 `aw-run` validates the format and exits 2 with a clear error if `/` is missing.
+
+---
+
+
+---
+
+## Phase-skip flags — save tokens on repeat runs
+
+The `configure` node auto-detects skippable phases. No flags needed in most
+cases:
+
+| Condition | Auto action |
+|---|---|
+| Epic `status == review` or `complete` | `implement` skipped |
+| `skip_implement` + all test files exist in worktree | `write-tests` also skipped |
+
+**Manual overrides:**
+
+```bash
+# Skip implement: write tests if missing, then run
+scripts/aw-run --tests-only FE-52
+
+# Skip implement AND write-tests: just run existing tests
+scripts/aw-run --reuse-tests FE-02
+
+# Granular
+scripts/aw-run --skip-implement BE-35
+scripts/aw-run --skip-write-tests BE-35
+
+# All flags work with aw-run-all.sh too:
+scripts/aw-run-all.sh -- --reuse-tests
+```
+
+**Example savings:**
+- FE-02 was at `status: complete` — a new run would auto-detect and skip both
+  `implement` (~90s, ~15k tokens) and `write-tests` (~50s, ~8k tokens),
+  going straight to `run-tests` → `commit` → `decide: CONVERGED`.
+- An epic at `review` with test files present → same skip path.
+- An epic at `planned` with no test files → full run (`mode: full`).
+
+The configure output is visible in the workflow log:
+```
+configure: mode=reuse-tests  skip_impl=True  skip_tests=True
+           status='complete'  tests_exist=True
+```
 
 ---
 
@@ -193,8 +238,11 @@ pi --resume "$(scripts/aw-inspect BE-31 --session)"  # replay conversation
 | Gotcha | What breaks | Mitigation |
 |---|---|---|
 | **GOTCHA-001** — Pi bash tool reports `grep` exit 1 as failure | Agent retries harmless searches repeatedly | `bash-normalize-exit.ts` extension normalises exit 1→0 for grep/find/ls |
-| **GOTCHA-002** — Double-quoting `$node.output` in bash: nodes | Archon's single-quoted JSON is re-wrapped in `"..."`, breaking bash on any `"` in the output | Never use `"$node.output"` in bash: blocks; let Archon's single-quoting stand |
+| **GOTCHA-002** — Double-quoting `$node.output` in bash: nodes | Archon's single-quoted JSON re-wrapped in `"..."` breaks bash when JSON contains `"` | Never use `"$node.output"` in bash: blocks |
 | **GOTCHA-003** — Archon worktree venv has no packages installed | Python tests xfail silently (ModuleNotFoundError caught by pytest.xfail) | `aw-test-backend.sh` runs `uv sync --all-packages` before pytest |
+| **GOTCHA-004** — Test runner exits 1 → `fix-blocked` skipped | Tests fail but coder never fixes them; workflow goes to arbitrate | Test runners always exit 0; failure via stdout content only |
+| **GOTCHA-005** — `aw-decide.sh` marker written to worktree, not main repo | `state=UNKNOWN`; all convergences treated as failures; merges skipped | Use `--git-common-dir` not `--show-toplevel` to find repo root |
+| **GOTCHA-006** — pnpm install stdout leaks "Scope:" before PASS | `run-tests.output` is multiline; `== 'PASS'` never matches | Use `&>/dev/null` on install commands, not just `2>/dev/null` |
 
 Full write-ups: `docs/gotchas/GOTCHA-00{1,2,3}-*.md`.
 
