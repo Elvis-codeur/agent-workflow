@@ -78,8 +78,8 @@ nodes:
   - id: run-tests
     depends_on: [write-tests]
     bash: |
-      bash scripts/aw-run-tests.sh "$read-epic.output.scope" \
-                                    "$read-epic.output.epic_id"
+      bash scripts/aw-run-tests.sh $read-epic.output.scope \
+                                    $read-epic.output.epic_id
     timeout: 600000
 
   # ---------------------------------------------------------------- coder fix (single-shot)
@@ -105,8 +105,8 @@ nodes:
     depends_on: [fix-blocked]
     when: "$run-tests.output != 'PASS'"
     bash: |
-      bash scripts/aw-run-tests.sh "$read-epic.output.scope" \
-                                    "$read-epic.output.epic_id"
+      bash scripts/aw-run-tests.sh $read-epic.output.scope \
+                                    $read-epic.output.epic_id
     timeout: 600000
 
   # ---------------------------------------------------------------- master arbitration
