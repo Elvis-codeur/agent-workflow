@@ -46,16 +46,38 @@ nodes:
         tests_acceptance: { type: string }
         spec_section: { type: string }
 
+  # ---------------------------------------------------------------- configure
+  # Runs after read-epic. Decides which phases to execute based on:
+  #   1. Current epic status  (review/complete → skip implement automatically)
+  #   2. Whether test files already exist in the worktree
+  #   3. User flags from aw-run (--skip-implement / --skip-write-tests / etc.)
+  #
+  # scripts/aw-configure.py handles all logic and outputs one JSON line:
+  #   {"skip_implement":"true|false","skip_write_tests":"true|false",
+  #    "mode":"full|tests-only|implement-only|reuse-tests","reason":"..."}
+  #
+  # Archon parses the JSON stdout for $configure.output.field access
+  # used in the implement and write-tests 'when:' conditions.
+  - id: configure
+    depends_on: [read-epic]
+    bash: |
+      python3 scripts/aw-configure.py \
+        $read-epic.output.epic_id \
+        $read-epic.output.scope \
+        $read-epic.output.tests_paths \
+        {{CONFIGURE_FLAGS}}
+    timeout: 30000
+
   # ---------------------------------------------------------------- coder
   # Single-shot: the /implement-epic skill instructs the agent to iterate
   # internally until the epic is review-ready or genuinely blocked. Macro-
   # level retries are handled by the outer aw-run recursion (see `decide`).
   #
-  # Key steps are inlined here so the agent does NOT need to fetch SKILL.md
-  # (saves ~1 000 tokens per run). CODEBASE-SUMMARY.md is read instead of
-  # spending 5 000+ tokens on codebase exploration.
+  # Skipped automatically when configure detects status=review/complete,
+  # or when the user passes --skip-implement / --tests-only / --reuse-tests.
   - id: implement
-    depends_on: [read-epic]
+    depends_on: [configure]
+    when: "$configure.output.skip_implement == 'false'"
     provider: {{CODER_PROVIDER}}
     model: {{CODER_MODEL}}
     idle_timeout: 120000
@@ -84,9 +106,16 @@ nodes:
       Iterate until the epic is `review` or you are genuinely blocked.
 
   # ---------------------------------------------------------------- tester (write)
-  # Key steps inlined — saves the SKILL.md tool call (~1 000 tokens).
+  # Skipped automatically when configure detects all test files already exist
+  # (e.g. from a previous run that didn't merge), or when the user passes
+  # --skip-write-tests / --reuse-tests.
+  #
+  # trigger_rule: none_failed_min_one_success — runs when implement completed
+  # OR was intentionally skipped, but NOT when it failed.
   - id: write-tests
-    depends_on: [implement]
+    depends_on: [implement, configure]
+    trigger_rule: none_failed_min_one_success
+    when: "$configure.output.skip_write_tests == 'false'"
     provider: {{TESTER_PROVIDER}}
     model: {{TESTER_MODEL}}
     context: fresh
@@ -110,8 +139,12 @@ nodes:
       - Do NOT update the progress YAML status.
 
   # ---------------------------------------------------------------- tester (run)
+  # trigger_rule: none_failed_min_one_success — runs when write-tests completed
+  # OR was intentionally skipped (reuse-tests / skip-write-tests modes),
+  # but NOT when write-tests failed.
   - id: run-tests
-    depends_on: [write-tests]
+    depends_on: [write-tests, configure]
+    trigger_rule: none_failed_min_one_success
     bash: |
       bash scripts/aw-run-tests.sh $read-epic.output.scope \
                                     $read-epic.output.epic_id
@@ -260,7 +293,7 @@ nodes:
   # .archon/state/iterate-decision-<epic> so scripts/aw-run can decide whether
   # to recurse, cleanup, or hard-fail. Always runs (trigger_rule: all_done).
   - id: decide
-    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, commit, update-context]
+    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, commit, update-context, configure]
     trigger_rule: all_done
     bash: |
       # Do NOT double-quote these: Archon already single-quotes each substituted

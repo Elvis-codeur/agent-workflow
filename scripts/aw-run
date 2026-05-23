@@ -6,9 +6,9 @@
 #   scripts/aw-run [options] <EPIC-ID>
 #
 # Options:
-#   --coder    PROVIDER:MODEL           (default: pi:github-copilot/claude-sonnet-4.6)
-#   --tester   PROVIDER:MODEL           (default: pi:github-copilot/claude-sonnet-4.6)
-#   --master   PROVIDER:MODEL           (default: pi:github-copilot/claude-sonnet-4.6)
+#   --coder    PROVIDER:MODEL           (default: pi:github-copilot/gpt-5.3-codex)
+#   --tester   PROVIDER:MODEL           (default: pi:github-copilot/gemini-3-flash-preview)
+#   --master   PROVIDER:MODEL           (default: pi:github-copilot/gpt-5.2)
 #   --max-impl-iterations N             (default: 10)
 #   --max-fix-attempts   N              (default: 3)
 #   --max-arbitration-attempts N        (default: 3; on Nth unsure, hard-fail)
@@ -18,15 +18,25 @@
 #   --keep-worktree                     do not run `archon complete` on success
 #   --dry-run                           render YAML and print path; do not run
 #
+# Phase-skip flags (save tokens when a phase was already done):
+#   --skip-implement   skip the implement node (auto-set if epic is review/complete)
+#   --skip-write-tests skip the write-tests node (auto-set if test files exist)
+#   --tests-only       shorthand: --skip-implement
+#                        (write tests if needed, then run them)
+#   --reuse-tests      shorthand: --skip-implement --skip-write-tests
+#                        (run existing tests on existing code, no AI writes)
+#
+# Auto-detection (no flags needed):
+#   - epic status == review or complete  → skip implement automatically
+#   - status == review AND test files exist in worktree → also skip write-tests
+#
 # PROVIDER must be one of: pi, claude, codex.
 # For pi, MODEL must be <catalog-provider>/<model-id>, e.g.:
-#   pi:github-copilot/claude-sonnet-4.6
+#   pi:github-copilot/gpt-5.3-codex
 #   pi:openai/gpt-4o
 #   pi:google/gemini-2.5-pro
 #   pi:openrouter/qwen/qwen3-coder  (nested slash OK)
 #
-# Defaults: all three roles use the Pi provider with your configured default
-# (github-copilot/claude-sonnet-4.6). Override per-run with the flags above.
 # Autocommit and worktree cleanup are ON by default.
 
 set -euo pipefail
@@ -44,6 +54,8 @@ CODER="$DEFAULT_CODER"
 TESTER="$DEFAULT_TESTER"
 MASTER="$DEFAULT_MASTER"
 FROM_BRANCH=""
+SKIP_IMPLEMENT=false
+SKIP_WRITE_TESTS=false
 MAX_IMPL=10
 MAX_FIX=3
 MAX_ARB=3
@@ -64,6 +76,10 @@ while [[ $# -gt 0 ]]; do
         --max-arbitration-attempts) MAX_ARB="$2"; shift 2 ;;
         --branch)              BRANCH="$2"; shift 2 ;;
         --from-branch)         FROM_BRANCH="$2"; shift 2 ;;
+        --skip-implement)      SKIP_IMPLEMENT=true; shift ;;
+        --skip-write-tests)    SKIP_WRITE_TESTS=true; shift ;;
+        --tests-only)          SKIP_IMPLEMENT=true; shift ;;         # write tests if needed, then run
+        --reuse-tests)         SKIP_IMPLEMENT=true; SKIP_WRITE_TESTS=true; shift ;; # run existing tests
         --no-autocommit)       AUTOCOMMIT=0; shift ;;
         --keep-worktree)       CLEAN_WORKTREE=0; shift ;;
         --dry-run)             DRY=1; shift ;;
@@ -115,6 +131,9 @@ sed \
     -e "s|{{TESTER_MODEL}}|$TESTER_MDL|g" \
     -e "s|{{MAX_IMPL_ITERATIONS}}|$MAX_IMPL|g" \
     -e "s|{{MAX_FIX_ATTEMPTS}}|$MAX_FIX|g" \
+    -e "s|{{SKIP_IMPLEMENT}}|$SKIP_IMPLEMENT|g" \
+    -e "s|{{SKIP_WRITE_TESTS}}|$SKIP_WRITE_TESTS|g" \
+    -e "s|{{CONFIGURE_FLAGS}}|$([ "$SKIP_IMPLEMENT" = true ] && printf '%s' '--skip-implement '; [ "$SKIP_WRITE_TESTS" = true ] && printf '%s' '--skip-write-tests')|g" \
     "$TEMPLATE" > "$OUT"
 
 if [[ "$AUTOCOMMIT" -eq 0 ]]; then
@@ -131,6 +150,8 @@ echo "  max-fix     = $MAX_FIX"
 echo "  max-arb     = $MAX_ARB"
 echo "  autocommit  = $AUTOCOMMIT"
 echo "  cleanup     = $CLEAN_WORKTREE"
+[[ "$SKIP_IMPLEMENT" == "true" ]]   && echo "  skip-impl   = yes (will be refined by configure node)"
+[[ "$SKIP_WRITE_TESTS" == "true" ]] && echo "  skip-tests  = yes (will be refined by configure node)"
 
 if [[ "$DRY" -eq 1 ]]; then
     exit 0
