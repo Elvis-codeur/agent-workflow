@@ -228,12 +228,77 @@ nodes:
       and ask them to pick `coder_right` or `tester_right`. Print the chosen
       verdict on the last line of your output.
 
+  # ---------------------------------------------------------------- ci-check
+  # Runs the project's fast CI gates (ruff format, mypy, biome, cargo fmt,
+  # schema codegen:check, Django migrations, lockfile integrity) BEFORE
+  # committing. Reads .github/workflows/ci.yml and skips infra-heavy steps.
+  #
+  # Triggers only when acceptance tests passed (one_success from run-tests
+  # or rerun-tests). If it fails, fix-ci + rerun-ci handle the repair.
+  # ALWAYS exits 0 (failure via stdout content, same contract as test runners).
+  - id: ci-check
+    depends_on: [run-tests, rerun-tests, configure]
+    trigger_rule: none_failed_min_one_success
+    when: "$run-tests.output == 'PASS' || $rerun-tests.output == 'PASS'"
+    bash: |
+      bash scripts/aw-ci-preflight.sh \
+        $read-epic.output.epic_id \
+        $read-epic.output.scope
+    timeout: 300000
+
+  # ---------------------------------------------------------------- fix-ci
+  # When ci-check fails (schema drift, missing migrations, stale lockfiles,
+  # format violations, etc.) this coder node diagnoses and repairs.
+  # It does NOT change implementation or test files — only CI-gate files.
+  - id: fix-ci
+    depends_on: [ci-check]
+    when: "$ci-check.output != 'PASS'"
+    provider: {{CODER_PROVIDER}}
+    model: {{CODER_MODEL}}
+    idle_timeout: 120000
+    prompt: |
+      The project's CI preflight failed after the acceptance tests passed.
+      You are the coder-agent. Fix ONLY the CI gate issues — do not touch
+      implementation or test files.
+
+      ## CI failure output
+      $ci-check.output
+
+      ## Common causes and fixes
+      | Symptom | Command to run |
+      |---|---|
+      | `FAILED_STEP: python/ruff format` | `uv run ruff format .` |
+      | `FAILED_STEP: python/ruff check` | `uv run ruff check --fix .` |
+      | `FAILED_STEP: python/mypy` | fix type errors in touched files |
+      | `django-migrations-stale` | `python manage.py makemigrations` |
+      | `uv-lock-stale` | `uv lock` |
+      | `pnpm-lock-stale` | `pnpm install` |
+      | `FAILED_STEP: schema-drift` | `pnpm -F @gensim/schemas codegen` |
+      | `FAILED_STEP: frontend/biome check` | `pnpm exec biome check --write .` |
+      | `FAILED_STEP: rust/cargo fmt` | `cargo fmt` |
+      | `FAILED_STEP: rust/cargo clippy` | fix the Clippy warnings |
+
+      After fixing, stage and commit:
+        `git add -A && git commit -m "fix(ci): <what was fixed>"`
+
+      Shell tip: append `|| true` to grep/find/ls existence checks.
+
+  # ---------------------------------------------------------------- rerun-ci
+  - id: rerun-ci
+    depends_on: [fix-ci]
+    when: "$ci-check.output != 'PASS'"
+    bash: |
+      bash scripts/aw-ci-preflight.sh \
+        $read-epic.output.epic_id \
+        $read-epic.output.scope
+    timeout: 300000
+
   # ---------------------------------------------------------------- commit
   # >>> AUTOCOMMIT (stripped by scripts/aw-run when --no-autocommit)
   - id: commit
-    depends_on: [run-tests, rerun-tests]
+    depends_on: [ci-check, rerun-ci]
     trigger_rule: one_success
-    when: "$run-tests.output == 'PASS' || $rerun-tests.output == 'PASS'"
+    when: "$ci-check.output == 'PASS' || $rerun-ci.output == 'PASS'"
     idle_timeout: 120000
     prompt: |
       Run the /commit skill. Do NOT push. Do NOT open a PR.
@@ -293,7 +358,7 @@ nodes:
   # .archon/state/iterate-decision-<epic> so scripts/aw-run can decide whether
   # to recurse, cleanup, or hard-fail. Always runs (trigger_rule: all_done).
   - id: decide
-    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, commit, update-context, configure]
+    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, commit, update-context, configure, ci-check, rerun-ci]
     trigger_rule: all_done
     bash: |
       # Do NOT double-quote these: Archon already single-quotes each substituted

@@ -149,7 +149,7 @@ fi
 # Scripts for the master loop + gotchas index
 printf "\n  Scripts:\n"
 for s in aw-run aw-run-all.sh aw-run-tests.sh aw-decide.sh gotchas-index.sh \
-         update-codebase-summary.sh aw-inspect; do
+         update-codebase-summary.sh aw-inspect aw-ci-preflight.sh; do
     if [[ -f "$SCRIPTS_SRC/$s" ]]; then
         copy_file "$SCRIPTS_SRC/$s" "$TARGET/scripts/$s"
         chmod +x "$TARGET/scripts/$s"
