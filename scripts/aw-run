@@ -31,10 +31,18 @@
 
 set -euo pipefail
 
-DEFAULT_PI_MODEL="pi:github-copilot/claude-sonnet-4.6"
-CODER="$DEFAULT_PI_MODEL"
-TESTER="$DEFAULT_PI_MODEL"
-MASTER="$DEFAULT_PI_MODEL"
+# Model defaults — chosen for throughput, not just capability.
+# claude-sonnet-4.6 is the most capable but throttles severely under
+# sequential load (GitHub Copilot tier). Codex models have higher code
+# throughput; gemini-3-flash is the fastest for simpler tasks.
+#
+# Override any role per-run:  scripts/aw-run --coder pi:github-copilot/claude-sonnet-4.6 EPIC
+DEFAULT_CODER="pi:github-copilot/gpt-5.3-codex"   # code-optimised, 400K ctx, high throughput
+DEFAULT_TESTER="pi:github-copilot/gemini-3-flash-preview"  # fast, sufficient for test writing
+DEFAULT_MASTER="pi:github-copilot/gpt-5.2"         # strong reasoning for arbitration
+CODER="$DEFAULT_CODER"
+TESTER="$DEFAULT_TESTER"
+MASTER="$DEFAULT_MASTER"
 FROM_BRANCH=""
 MAX_IMPL=10
 MAX_FIX=3
