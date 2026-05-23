@@ -58,7 +58,7 @@ The script is safe to re-run — it will not overwrite files you have already cu
 │   ├── aw-decide.sh                   ← loop-driver decision logic
 │   └── gotchas-index.sh               ← regenerates docs/gotchas/INDEX.md
 ├── .archon/workflows/
-│   └── aw-master-loop.template.yaml   ← rendered per-run by aw-run
+│   └── aw-master-loop.template.yaml.tmpl   ← rendered per-run by aw-run
 ├── docs/
 │   ├── gotchas/
 │   │   ├── INDEX.md                   ← auto-generated; read at Step 0
@@ -127,7 +127,7 @@ scripts/aw-run --coder pi:kiro/minimax-m2-5 \
 
 Under the hood:
 
-1. The wrapper renders `.archon/workflows/aw-master-loop.template.yaml` with
+1. The wrapper renders `.archon/workflows/aw-master-loop.template.yaml.tmpl` with
    the chosen per-role provider/model triples.
 2. [Archon](https://github.com/coleam00/Archon) creates an isolated git
    worktree and runs the DAG: `read-epic → implement (loop) → write-tests →

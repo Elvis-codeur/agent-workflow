@@ -59,7 +59,7 @@ scripts/aw-run \
     EPIC-AUTH-001
 ```
 
-`aw-run` renders `.archon/workflows/aw-master-loop.template.yaml` with the
+`aw-run` renders `.archon/workflows/aw-master-loop.template.yaml.tmpl` with the
 chosen `provider`/`model`/`modelReasoningEffort` triples into
 `.archon/workflows/.runs/aw-run-<ts>.yaml`, then executes:
 
@@ -98,7 +98,7 @@ The `unsure` branch is the only point at which the workflow blocks on input.
 ```
 .archon/
 └── workflows/
-    └── aw-master-loop.template.yaml      # rendered by scripts/aw-run
+    └── aw-master-loop.template.yaml.tmpl      # rendered by scripts/aw-run
 scripts/
 └── aw-run                                # bash wrapper, renders + invokes
 skills/
