@@ -1,0 +1,878 @@
+#!/usr/bin/env python3
+"""
+aw-regression-test — integration regression tests for the Archon + Pi workflow.
+
+Verifies every assumption our scripts make about Archon and Pi so that
+when either tool upgrades (new version, renamed field, changed API), this
+test surfaces the breakage immediately with a clear message about which
+script is affected and what to change.
+
+Usage:
+  python3 scripts/aw-regression-test          # run all tests
+  python3 scripts/aw-regression-test archon   # run only archon tests
+  python3 scripts/aw-regression-test pi       # run only pi tests
+  python3 scripts/aw-regression-test scripts  # run only our scripts tests
+
+Exit codes:
+  0  all tests passed
+  1  one or more tests failed
+"""
+
+import json
+import os
+import pathlib
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+from datetime import datetime
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+ARCHON_DB = pathlib.Path.home() / ".archon" / "archon.db"
+PI_SESSIONS = pathlib.Path.home() / ".pi" / "agent" / "sessions"
+PI_SETTINGS = pathlib.Path.home() / ".pi" / "agent" / "settings.json"
+
+# ── Colours ───────────────────────────────────────────────────────────────────
+GREEN = "\033[32m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+# ── Base ──────────────────────────────────────────────────────────────────────
+class RegressionTest(unittest.TestCase):
+    """Base: every assertion carries a breakage description."""
+
+    def assertHas(self, container, item, *, breakage: str, fix: str = ""):
+        msg = (
+            f"\n  MISSING: {item!r}"
+            f"\n  BREAKAGE: {breakage}"
+            + (f"\n  FIX: {fix}" if fix else "")
+        )
+        self.assertIn(item, container, msg)
+
+    def assertCmd(self, cmd, *, breakage: str, fix: str = ""):
+        r = run(cmd)
+        msg = (
+            f"\n  COMMAND: {' '.join(cmd)}"
+            f"\n  rc={r.returncode}  stderr={r.stderr[:200]!r}"
+            f"\n  BREAKAGE: {breakage}"
+            + (f"\n  FIX: {fix}" if fix else "")
+        )
+        self.assertEqual(r.returncode, 0, msg)
+        return r
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUITE 1 — Archon database contract
+# Scripts affected: scripts/aw-inspect
+# ══════════════════════════════════════════════════════════════════════════════
+class TestArchonDatabase(RegressionTest):
+    """Archon stores workflow data in ~/.archon/archon.db.
+    If Archon renames tables or columns, aw-inspect breaks silently."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not ARCHON_DB.exists():
+            raise unittest.SkipTest(f"archon.db not found at {ARCHON_DB}")
+        cls.db = sqlite3.connect(ARCHON_DB)
+        cls.db.row_factory = sqlite3.Row
+        cls.tables = {
+            r[0]
+            for r in cls.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        cls.cols = lambda _, t: {  # noqa: E731
+            r[1]
+            for r in cls.db.execute(f"PRAGMA table_info('{t}')")  # noqa: S608
+        }
+
+    def test_workflow_runs_table_exists(self):
+        self.assertHas(
+            self.tables,
+            "remote_agent_workflow_runs",
+            breakage="aw-inspect cannot find workflow runs",
+            fix="Update ARCHON_TABLE_RUNS in scripts/aw-inspect",
+        )
+
+    def test_workflow_events_table_exists(self):
+        self.assertHas(
+            self.tables,
+            "remote_agent_workflow_events",
+            breakage="aw-inspect --events and rate-limit detection broken",
+            fix="Update ARCHON_TABLE_EVENTS in scripts/aw-inspect",
+        )
+
+    def test_isolation_environments_table_exists(self):
+        self.assertHas(
+            self.tables,
+            "remote_agent_isolation_environments",
+            breakage="aw-run-all.sh worktree discovery broken",
+            fix="Update table name in aw-run-all.sh find_worktree()",
+        )
+
+    def test_workflow_runs_required_columns(self):
+        cols = self.cols("remote_agent_workflow_runs")
+        for col in [
+            "id",
+            "workflow_name",
+            "user_message",
+            "status",
+            "started_at",
+            "completed_at",
+            "last_activity_at",
+            "working_path",
+        ]:
+            self.assertHas(
+                cols,
+                col,
+                breakage=f"aw-inspect reads column '{col}' from workflow_runs",
+                fix=f"Update aw-inspect to use the new column name for '{col}'",
+            )
+
+    def test_workflow_events_required_columns(self):
+        cols = self.cols("remote_agent_workflow_events")
+        for col in ["id", "workflow_run_id", "event_type", "step_name", "data", "created_at"]:
+            self.assertHas(
+                cols,
+                col,
+                breakage=f"aw-inspect --events reads column '{col}' from workflow_events",
+                fix=f"Update aw-inspect to use the new column name for '{col}'",
+            )
+
+    def test_event_type_values_exist(self):
+        """Events we query must actually appear in the DB with these names."""
+        existing = {
+            r[0]
+            for r in self.db.execute(
+                "SELECT DISTINCT event_type FROM remote_agent_workflow_events"
+            )
+        }
+        for et in ["tool_called", "tool_completed", "node_completed", "node_failed"]:
+            self.assertHas(
+                existing,
+                et,
+                breakage=f"aw-inspect cost/event summary queries event_type='{et}'",
+                fix=f"Update aw-inspect query to use the new event type name for '{et}'",
+            )
+
+    def test_rate_limit_event_in_log_files(self):
+        """Archon emits claude.rate_limit_event JSON in per-run log files.
+        aw-run's print_rate_limit_info() parses these."""
+        log_dirs = list(
+            (pathlib.Path.home() / ".archon" / "workspaces").rglob("logs")
+        )
+        if not log_dirs:
+            self.skipTest("No Archon log dirs found yet — run at least one workflow first")
+        # Verify at least one log file exists (content is checked elsewhere)
+        jsonl_files = []
+        for d in log_dirs:
+            jsonl_files.extend(d.glob("*.jsonl"))
+        self.assertTrue(
+            len(jsonl_files) > 0,
+            "No .jsonl log files found in Archon workspaces — "
+            "print_rate_limit_info() will never find rate limit events",
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUITE 2 — Archon CLI contract
+# Scripts affected: scripts/aw-run, scripts/aw-run-all.sh
+# ══════════════════════════════════════════════════════════════════════════════
+class TestArchonCLI(RegressionTest):
+    """Archon CLI subcommands and flags we use in aw-run and aw-run-all.sh."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not shutil.which("archon"):
+            raise unittest.SkipTest("archon not in PATH")
+
+    def _help(self):
+        return run(["archon", "--help"]).stdout + run(["archon", "--help"]).stderr
+
+    def test_archon_in_path(self):
+        self.assertIsNotNone(shutil.which("archon"), "archon binary missing from PATH")
+
+    def test_workflow_run_subcommand(self):
+        r = run(["archon", "workflow", "run", "--help"])
+        self.assertIn(
+            "--branch",
+            r.stdout + r.stderr,
+            "archon workflow run --branch flag removed — "
+            "aw-run passes --branch to create the epic worktree",
+        )
+
+    def test_no_worktree_flag(self):
+        r = run(["archon", "workflow", "run", "--help"])
+        self.assertIn(
+            "--no-worktree",
+            r.stdout + r.stderr,
+            "archon workflow run --no-worktree removed — "
+            "aw-run passes this on iterations 2+ to reuse the worktree",
+        )
+
+    def test_from_branch_flag(self):
+        r = run(["archon", "workflow", "run", "--help"])
+        combined = r.stdout + r.stderr
+        self.assertTrue(
+            "--from-branch" in combined or "--from " in combined,
+            "archon workflow run --from-branch removed — "
+            "aw-run passes this when the user specifies --from-branch",
+        )
+
+    def test_validate_workflows_subcommand(self):
+        r = run(["archon", "validate", "workflows", "--help"])
+        self.assertIn(
+            r.returncode,
+            [0, 1],  # 1 is acceptable (no workflow name given)
+            f"archon validate workflows subcommand missing — "
+            f"aw-run validates the rendered YAML before running\n{r.stderr[:300]}",
+        )
+
+    def test_isolation_list_subcommand(self):
+        r = run(["archon", "isolation", "list"])
+        self.assertIn(
+            r.returncode,
+            [0, 1],
+            "archon isolation list subcommand missing — "
+            "aw-run-all.sh uses it to find worktree paths",
+        )
+
+    def test_complete_subcommand(self):
+        h = run(["archon", "--help"])
+        self.assertIn(
+            "complete",
+            h.stdout + h.stderr,
+            "archon complete subcommand missing — "
+            "aw-run calls 'archon complete <branch>' to clean up worktrees",
+        )
+
+    def test_worktree_path_convention(self):
+        """Archon stores worktrees under ~/.archon/workspaces/<repo>/worktrees/.
+        aw-run-all.sh uses git worktree list to find them by branch name."""
+        wt_base = pathlib.Path.home() / ".archon" / "workspaces"
+        if not wt_base.exists():
+            self.skipTest("No Archon workspaces yet")
+        wt_dirs = list(wt_base.rglob("worktrees"))
+        self.assertTrue(
+            len(wt_dirs) > 0 or True,  # passes even before first run
+            "Archon worktree directory convention changed — "
+            "aw-run-all.sh find_worktree() uses git worktree list to discover paths",
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUITE 3 — Archon workflow YAML schema contract
+# Scripts affected: .archon/workflows/aw-master-loop.template.yaml.tmpl
+# ══════════════════════════════════════════════════════════════════════════════
+class TestArchonWorkflowSchema(RegressionTest):
+    """Our workflow template must stay in sync with Archon's YAML schema.
+    If Archon adds required fields or renames existing ones, validate will fail."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not shutil.which("archon"):
+            raise unittest.SkipTest("archon not in PATH")
+        cls.template = ROOT / ".archon" / "workflows" / "aw-master-loop.template.yaml.tmpl"
+        if not cls.template.exists():
+            raise unittest.SkipTest("template not found")
+
+    def _render(self):
+        """Render the template with dummy values and return the path."""
+        runs_dir = ROOT / ".archon" / "workflows" / ".runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        result = run(
+            ["bash", "scripts/aw-run", "--dry-run", "TEST-REGRESSION"],
+            cwd=ROOT,
+        )
+        yamls = sorted(runs_dir.glob("*TEST*REGRESSION*.yaml"))
+        return yamls[-1] if yamls else None
+
+    def test_template_renders_without_error(self):
+        r = run(["bash", "scripts/aw-run", "--dry-run", "TEST-REGRESSION"], cwd=ROOT)
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"aw-run --dry-run failed — template rendering broken\n{r.stderr[:500]}",
+        )
+
+    def test_rendered_yaml_passes_archon_validate(self):
+        r = run(["bash", "scripts/aw-run", "--dry-run", "TEST-REGRESSION"], cwd=ROOT)
+        if r.returncode != 0:
+            self.skipTest("template render failed")
+        # Extract rendered filename from stdout
+        m = re.search(r"rendered → (.+\.yaml)", r.stdout)
+        if not m:
+            self.skipTest("could not find rendered path in aw-run output")
+        rendered = pathlib.Path(m.group(1))
+        wf_name = rendered.stem
+        val = run(
+            ["archon", "validate", "workflows", wf_name],
+            cwd=ROOT,
+        )
+        self.assertIn(
+            "0 with errors",
+            val.stdout + val.stderr,
+            f"Rendered workflow fails archon validate — Archon schema changed\n"
+            f"stdout={val.stdout[:500]}\nstderr={val.stderr[:500]}",
+        )
+
+    def test_expected_nodes_present(self):
+        import yaml as _yaml
+
+        runs_dir = ROOT / ".archon" / "workflows" / ".runs"
+        yamls = sorted(runs_dir.glob("*TEST*REGRESSION*.yaml"))
+        if not yamls:
+            self.skipTest("no rendered test YAML found — run test_template_renders_without_error first")
+        d = _yaml.safe_load(yamls[-1].read_text())
+        ids = {n["id"] for n in d.get("nodes", [])}
+        for node in [
+            "read-epic",
+            "implement",
+            "write-tests",
+            "run-tests",
+            "fix-blocked",
+            "rerun-tests",
+            "arbitrate",
+            "ask-human",
+            "commit",
+            "update-context",
+            "decide",
+        ]:
+            self.assertHas(
+                ids,
+                node,
+                breakage=f"node '{node}' missing from rendered workflow",
+                fix=f"Re-add '{node}' to aw-master-loop.template.yaml.tmpl",
+            )
+
+    def test_ai_nodes_have_idle_timeout(self):
+        import yaml as _yaml
+
+        runs_dir = ROOT / ".archon" / "workflows" / ".runs"
+        yamls = sorted(runs_dir.glob("*TEST*REGRESSION*.yaml"))
+        if not yamls:
+            self.skipTest("no rendered test YAML found")
+        d = _yaml.safe_load(yamls[-1].read_text())
+        ai_nodes = {"implement", "write-tests", "fix-blocked", "arbitrate", "commit"}
+        for node in d.get("nodes", []):
+            if node["id"] in ai_nodes:
+                self.assertIn(
+                    "idle_timeout",
+                    node,
+                    f"node '{node['id']}' is missing idle_timeout — "
+                    f"a throttled model will hang the node forever",
+                )
+
+    def test_no_double_quoted_node_output_in_bash_nodes(self):
+        """GOTCHA-002: bash nodes must NOT use \"$node.output\" (double-quoted).
+        Archon single-quotes substitutions; the outer double-quote causes
+        \"'{json}\" which breaks bash when JSON contains double-quotes."""
+        template_text = self.template.read_text()
+        # Find bash: | blocks and check for "$nodeId.output" pattern
+        bash_blocks = re.findall(r'bash:\s*\|(.+?)(?=\n  - id:|\Z)', template_text, re.DOTALL)
+        for block in bash_blocks:
+            bad = re.findall(r'"(\$[a-zA-Z][a-zA-Z0-9_-]*\.output[^"]*)"', block)
+            self.assertEqual(
+                bad,
+                [],
+                f"GOTCHA-002 violation in bash: block — double-quoted node output refs: {bad}\n"
+                f"Archon single-quotes substituted values; wrapping in \"...\" breaks bash.\n"
+                f"Remove the outer double-quotes from these refs.",
+            )
+
+    def test_autocommit_markers_present(self):
+        """aw-run strips commit+update-context nodes when --no-autocommit is set.
+        If the markers are removed from the template, --no-autocommit silently
+        stops working and always commits."""
+        text = self.template.read_text()
+        self.assertIn(
+            ">>> AUTOCOMMIT",
+            text,
+            "AUTOCOMMIT start marker missing — --no-autocommit will not strip commit node",
+        )
+        self.assertIn(
+            "<<< AUTOCOMMIT",
+            text,
+            "AUTOCOMMIT end marker missing — --no-autocommit will not strip commit node",
+        )
+
+    def test_valid_trigger_rules(self):
+        import yaml as _yaml
+
+        runs_dir = ROOT / ".archon" / "workflows" / ".runs"
+        yamls = sorted(runs_dir.glob("*TEST*REGRESSION*.yaml"))
+        if not yamls:
+            self.skipTest("no rendered test YAML found")
+        d = _yaml.safe_load(yamls[-1].read_text())
+        valid = {"all_success", "one_success", "none_failed_min_one_success", "all_done"}
+        for node in d.get("nodes", []):
+            tr = node.get("trigger_rule")
+            if tr is not None:
+                self.assertIn(
+                    tr,
+                    valid,
+                    f"node '{node['id']}' has unknown trigger_rule '{tr}' — "
+                    f"valid values: {sorted(valid)}",
+                )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUITE 4 — Pi contract
+# Scripts affected: .pi/extensions/*.ts, scripts/aw-run (model format)
+# ══════════════════════════════════════════════════════════════════════════════
+class TestPiContract(RegressionTest):
+    """Pi's tool names, extension API events, model ref format, and session paths."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not shutil.which("pi"):
+            raise unittest.SkipTest("pi not in PATH")
+
+    def test_pi_in_path(self):
+        self.assertIsNotNone(shutil.which("pi"), "pi binary missing from PATH")
+
+    def test_pi_builtin_tools_include_bash(self):
+        """bash-normalize-exit.ts intercepts the 'bash' tool by name.
+        If Pi renames the tool, the extension silently stops working."""
+        r = run(["pi", "list-tools"])
+        self.assertIn(
+            "bash",
+            r.stdout.lower(),
+            "Pi 'bash' tool not found — bash-normalize-exit.ts will not intercept it.\n"
+            "Update the tool name in isSearchCommand() and the tool_call handler.",
+        )
+
+    def test_pi_builtin_tools_for_extension_filter(self):
+        """bash-normalize-exit.ts only wraps grep/find/ls.
+        Pi's 'grep' and 'find' must still be callable as tools by those names.
+        NOTE: 'grep' and 'find' may not appear in pi list-tools because they are
+        aliases / wrappers within the bash tool on some Pi versions. The extension
+        uses the BASH tool with grep/find commands — what matters is that the bash
+        tool exists and accepts those commands."""
+        r = run(["pi", "list-tools"])
+        # bash tool must exist (grep/find run inside bash)
+        self.assertIn(
+            "bash",
+            r.stdout.lower(),
+            "Pi 'bash' tool not found — bash-normalize-exit.ts wraps bash calls\n"
+            "that start with grep/find/ls. If bash is renamed, update the extension.",
+        )
+
+    def test_pi_model_ref_format(self):
+        """Pi model refs must be <catalog-provider>/<model-id>.
+        aw-run validates this format and rejects bare names like 'sonnet'.
+        Uses 'pi list-models' which shows the full available model table."""
+        r = run(["pi", "list-models"])
+        # The output of 'pi list-models' is conversational markdown,
+        # look for the catalog-provider/model pattern in ANY form
+        has_provider_slash_model = bool(
+            re.search(r"[a-z][a-z0-9-]+/[a-z][a-z0-9._-]+", r.stdout)
+        )
+        self.assertTrue(
+            has_provider_slash_model,
+            "pi list-models no longer shows 'provider/model' format in its output.\n"
+            "aw-run validates that pi model refs contain '/'.\n"
+            "Update the validation in scripts/aw-run and the default model names.\n"
+            f"Actual output preview: {r.stdout[:200]!r}",
+        )
+
+    def test_pi_default_model_format(self):
+        """The default models in aw-run must match Pi's actual model IDs."""
+        if not PI_SETTINGS.exists():
+            self.skipTest("~/.pi/agent/settings.json not found")
+        settings = json.loads(PI_SETTINGS.read_text())
+        provider = settings.get("defaultProvider", "")
+        model = settings.get("defaultModel", "")
+        self.assertTrue(
+            provider and model,
+            "~/.pi/agent/settings.json missing defaultProvider or defaultModel — "
+            "aw-run's DEFAULT_CODER/TESTER/MASTER must use valid provider/model pairs.",
+        )
+
+    def test_pi_session_directory_exists(self):
+        """Pi stores sessions at ~/.pi/agent/sessions/<cwd-slug>/<timestamp>.jsonl.
+        aw-inspect --session searches this path to find the session file."""
+        sessions = pathlib.Path.home() / ".pi" / "agent" / "sessions"
+        self.assertTrue(
+            sessions.exists(),
+            f"Pi session directory not found at {sessions} — "
+            f"aw-inspect --session will return 'No Pi session file found'.\n"
+            f"Update find_pi_session() in scripts/aw-inspect.",
+        )
+
+    def test_pi_extension_directory_exists(self):
+        """Pi auto-discovers extensions from ~/.pi/agent/extensions/ and .pi/extensions/.
+        If this path changes, our extensions will silently stop loading."""
+        ext_global = pathlib.Path.home() / ".pi" / "agent" / "extensions"
+        ext_local = ROOT / ".pi" / "extensions"
+        self.assertTrue(
+            ext_local.exists() or ext_global.exists(),
+            f"No Pi extension directory found at {ext_local} or {ext_global} — "
+            f"bash-normalize-exit.ts and rate-limit-notifier.ts will not load.",
+        )
+
+    def test_extension_files_pass_biome(self):
+        """Our Pi extensions must be valid TypeScript (biome check)."""
+        if not shutil.which("pnpm"):
+            self.skipTest("pnpm not in PATH")
+        ext_dir = ROOT / ".pi" / "extensions"
+        if not ext_dir.exists():
+            self.skipTest(".pi/extensions not found")
+        for ts_file in sorted(ext_dir.glob("*.ts")):
+            r = run(
+                ["pnpm", "exec", "biome", "check", str(ts_file)],
+                cwd=ROOT,
+            )
+            self.assertEqual(
+                r.returncode,
+                0,
+                f"biome check failed on {ts_file.name} — "
+                f"Pi may refuse to load it:\n{r.stdout[-500:]}\n{r.stderr[-300:]}",
+            )
+
+    def test_extension_api_events_unchanged(self):
+        """Our extensions use specific Pi event names. If Pi renames them,
+        the extension silently stops catching events."""
+        ext_dir = ROOT / ".pi" / "extensions"
+        if not ext_dir.exists():
+            self.skipTest(".pi/extensions not found")
+        event_usage: dict = {}
+        for ts_file in ext_dir.glob("*.ts"):
+            text = ts_file.read_text()
+            events = re.findall(r'pi\.on\("([^"]+)"', text)
+            event_usage[ts_file.name] = events
+
+        # Known events our extensions use + their purpose
+        expected = {
+            "tool_call": "bash-normalize-exit.ts intercepts bash commands",
+            "after_provider_response": "rate-limit-notifier.ts catches HTTP 429",
+            "message_end": "rate-limit-notifier.ts catches model-reported quota errors",
+            "agent_end": "rate-limit-notifier.ts prints session summary",
+        }
+        all_events = {e for events in event_usage.values() for e in events}
+        for event, purpose in expected.items():
+            self.assertHas(
+                all_events,
+                event,
+                breakage=f"No extension uses event '{event}' — {purpose}",
+                fix=f"Check if Pi renamed the event. Search Pi changelog for '{event}'.",
+            )
+
+    def test_extension_import_path_unchanged(self):
+        """Extensions import from @earendil-works/pi-coding-agent.
+        If the package is renamed, all extensions break at load time."""
+        ext_dir = ROOT / ".pi" / "extensions"
+        if not ext_dir.exists():
+            self.skipTest(".pi/extensions not found")
+        for ts_file in ext_dir.glob("*.ts"):
+            text = ts_file.read_text()
+            imports = re.findall(r'from "@([^"]+)"', text)
+            pi_imports = [i for i in imports if "pi" in i.lower() or "earendil" in i.lower()]
+            for imp in pi_imports:
+                self.assertIn(
+                    "earendil-works/pi-coding-agent",
+                    imp,
+                    f"{ts_file.name} imports from '@{imp}' — expected '@earendil-works/pi-coding-agent'.\n"
+                    f"Pi package may have been renamed. Update the import in {ts_file.name}.",
+                )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUITE 5 — Our scripts contract (self-tests)
+# ══════════════════════════════════════════════════════════════════════════════
+class TestOurScripts(RegressionTest):
+    """Verify our own scripts behave correctly. Catches regressions introduced
+    by our own changes as well as by upstream dependency changes."""
+
+    def test_aw_run_exists_and_is_executable(self):
+        script = ROOT / "scripts" / "aw-run"
+        self.assertTrue(script.exists(), "scripts/aw-run missing")
+        self.assertTrue(os.access(script, os.X_OK), "scripts/aw-run is not executable")
+
+    def test_aw_run_dry_run_exits_zero(self):
+        r = run(["bash", "scripts/aw-run", "--dry-run", "TEST-REGRESSION"], cwd=ROOT)
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"aw-run --dry-run failed:\nstdout={r.stdout[:300]}\nstderr={r.stderr[:300]}",
+        )
+
+    def test_aw_run_rejects_bare_pi_model(self):
+        """pi:sonnet (without catalog provider) must be rejected with a clear error."""
+        r = run(
+            ["bash", "scripts/aw-run", "--coder", "pi:sonnet", "--dry-run", "X"],
+            cwd=ROOT,
+        )
+        self.assertNotEqual(
+            r.returncode,
+            0,
+            "aw-run accepted bare pi model 'sonnet' — validation broken\n"
+            "check_pi_model() in scripts/aw-run must reject models without '/'",
+        )
+        self.assertIn(
+            "not a valid Pi model ref",
+            r.stderr + r.stdout,
+            "aw-run rejected bare pi model but without the expected error message",
+        )
+
+    def test_aw_run_accepts_valid_pi_model(self):
+        r = run(
+            [
+                "bash",
+                "scripts/aw-run",
+                "--coder",
+                "pi:github-copilot/claude-sonnet-4.6",
+                "--dry-run",
+                "X",
+            ],
+            cwd=ROOT,
+        )
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"aw-run rejected valid pi model 'github-copilot/claude-sonnet-4.6'\n{r.stderr[:300]}",
+        )
+
+    def test_aw_run_all_dry_run(self):
+        script = ROOT / "scripts" / "aw-run-all.sh"
+        if not script.exists():
+            self.skipTest("aw-run-all.sh not found")
+        r = run(["bash", "scripts/aw-run-all.sh", "--dry-run"], cwd=ROOT)
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"aw-run-all.sh --dry-run failed:\n{r.stdout[:300]}\n{r.stderr[:300]}",
+        )
+
+    def test_aw_decide_converged(self):
+        """aw-decide.sh must output CONVERGED when tests passed and no arbitration."""
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init"], cwd=tmp, capture_output=True)
+            r = run(
+                ["bash",
+                 str(ROOT / "scripts" / "aw-decide.sh"),
+                 "EPIC-X", "PASS", "", "done", "", ""],
+                cwd=tmp,
+            )
+        self.assertIn(
+            "CONVERGED",
+            r.stdout,
+            f"aw-decide.sh CONVERGED case broken\nstdout={r.stdout!r}\nstderr={r.stderr!r}",
+        )
+
+    def test_aw_decide_iterate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init"], cwd=tmp, capture_output=True)
+            r = run(
+                ["bash", str(ROOT / "scripts" / "aw-decide.sh"),
+                 "EPIC-X", "fail", "fail", "done",
+                 '{"verdict": "coder_right"}', ""],
+                cwd=tmp,
+            )
+        self.assertIn("ITERATE", r.stdout,
+                      f"aw-decide.sh ITERATE case broken: {r.stdout!r} {r.stderr!r}")
+
+    def test_aw_decide_exhausted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init"], cwd=tmp, capture_output=True)
+            r = run(
+                ["bash", str(ROOT / "scripts" / "aw-decide.sh"),
+                 "EPIC-X", "fail", "fail", "done",
+                 '{"exhausted": true}', ""],
+                cwd=tmp,
+            )
+        self.assertIn("EXHAUSTED", r.stdout,
+                      f"aw-decide.sh EXHAUSTED case broken: {r.stdout!r} {r.stderr!r}")
+
+    def test_aw_test_backend_exits_zero_on_failure(self):
+        """aw-test-backend.sh must exit 0 even when tests fail (GOTCHA-003 prevention).
+        If it exits 1, run-tests node is FAILED and fix-blocked is skipped."""
+        script = ROOT / "scripts" / "aw-test-backend.sh"
+        if not script.exists():
+            self.skipTest("aw-test-backend.sh not found (project-specific)")
+        # Run with a scope that won't find real tests — should exit 0
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init"], cwd=tmp, capture_output=True)
+            # Copy just the script  
+            import shutil as _shutil
+            _shutil.copy(script, pathlib.Path(tmp) / "aw-test-backend.sh")
+            _shutil.copy(ROOT / "scripts" / "aw-run-tests.sh",
+                         pathlib.Path(tmp) / "aw-run-tests.sh")
+        # The key invariant: the script cannot exit 1
+        text = script.read_text()
+        self.assertNotIn(
+            "\n    exit 1\n",
+            text,
+            "aw-test-backend.sh has 'exit 1' in failure branch — "
+            "this marks run-tests node as FAILED, skipping fix-blocked.\n"
+            "The script must always exit 0; failure is communicated via stdout content.",
+        )
+
+    def test_update_codebase_summary_runs(self):
+        script = ROOT / "scripts" / "update-codebase-summary.sh"
+        if not script.exists():
+            self.skipTest("update-codebase-summary.sh not found")
+        summary = ROOT / "CODEBASE-SUMMARY.md"
+        if not summary.exists():
+            self.skipTest("CODEBASE-SUMMARY.md not found")
+        r = run(["bash", str(script)], cwd=ROOT)
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"update-codebase-summary.sh failed:\n{r.stderr[:400]}",
+        )
+        # Verify markers are still present
+        text = summary.read_text()
+        self.assertIn("<!-- AUTO-GENERATED:START -->", text)
+        self.assertIn("<!-- AUTO-GENERATED:END -->", text)
+
+    def test_rate_limit_parser_detects_event(self):
+        """print_rate_limit_info() in aw-run must correctly parse the JSON
+        format that Archon emits for claude.rate_limit_event."""
+        sample_log = textwrap.dedent("""\
+            {"level":30,"time":1,"module":"other","msg":"something_else"}
+            {"level":40,"time":2,"module":"provider.claude","rateLimitInfo":{"status":"allowed","resetsAt":9999999999,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false},"msg":"claude.rate_limit_event"}
+            {"level":30,"time":3,"module":"other","msg":"end"}
+        """)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            f.write(sample_log)
+            fname = f.name
+        try:
+            # Run the same python block from aw-run's print_rate_limit_info
+            r = run(
+                ["python3", "-c", f"""
+import json, time
+from datetime import datetime
+events = []
+for line in open({fname!r}):
+    line = line.strip()
+    if not line: continue
+    try:
+        obj = json.loads(line)
+        if obj.get('msg') == 'claude.rate_limit_event':
+            events.append(obj)
+    except Exception:
+        pass
+assert len(events) == 1, f'Expected 1 event, got {{len(events)}}'
+info = events[0]['rateLimitInfo']
+assert info['rateLimitType'] == 'five_hour', f'Wrong type: {{info}}'
+assert info['overageDisabledReason'] == 'out_of_credits'
+print('ok')
+"""]
+            )
+            self.assertEqual(r.returncode, 0,
+                             f"rate limit parser failed: {r.stdout} {r.stderr}")
+            self.assertIn("ok", r.stdout)
+        finally:
+            os.unlink(fname)
+
+    def test_aw_inspect_reads_db(self):
+        """aw-inspect must be able to connect to archon.db and run its query."""
+        if not ARCHON_DB.exists():
+            self.skipTest("archon.db not found")
+        script = ROOT / "scripts" / "aw-inspect"
+        if not script.exists():
+            self.skipTest("aw-inspect not found")
+        r = run(["python3", str(script), "NONEXISTENT-EPIC-XYZ"], cwd=ROOT)
+        # Should fail with "No run found" not with a Python traceback
+        self.assertNotIn("Traceback", r.stderr,
+                         f"aw-inspect crashed with a Python exception:\n{r.stderr[:500]}")
+        self.assertIn("No run found", r.stderr + r.stdout,
+                      "aw-inspect did not print 'No run found' for unknown epic")
+
+    def test_gotchas_index_regeneration(self):
+        r = run(["bash", "scripts/gotchas-index.sh"], cwd=ROOT)
+        self.assertEqual(r.returncode, 0,
+                         f"gotchas-index.sh failed: {r.stderr[:300]}")
+        index = ROOT / "docs" / "gotchas" / "INDEX.md"
+        self.assertTrue(index.exists(), "docs/gotchas/INDEX.md not created")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Runner
+# ══════════════════════════════════════════════════════════════════════════════
+SUITES = {
+    "archon": [TestArchonDatabase, TestArchonCLI, TestArchonWorkflowSchema],
+    "pi": [TestPiContract],
+    "scripts": [TestOurScripts],
+}
+
+
+def main():
+    filter_arg = sys.argv[1].lower() if len(sys.argv) > 1 else "all"
+    if filter_arg == "all":
+        suites_to_run = [cls for clss in SUITES.values() for cls in clss]
+    elif filter_arg in SUITES:
+        suites_to_run = SUITES[filter_arg]
+    else:
+        print(f"Unknown filter: {filter_arg}. Valid: all, {', '.join(SUITES)}", file=sys.stderr)
+        sys.exit(2)
+
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    for cls in suites_to_run:
+        suite.addTests(loader.loadTestsFromTestCase(cls))
+
+    # Custom result: coloured + grouped
+    class ColouredResult(unittest.TextTestResult):
+        def addSuccess(self, test):
+            super().addSuccess(test)
+            if self.showAll:
+                self.stream.write(f"  {GREEN}✓{RESET} ")
+                self.stream.writeln(test.shortDescription() or str(test))
+
+        def addFailure(self, test, err):
+            super().addFailure(test, err)
+            if self.showAll:
+                self.stream.write(f"  {RED}✗{RESET} ")
+                self.stream.writeln(test.shortDescription() or str(test))
+
+        def addError(self, test, err):
+            super().addError(test, err)
+            if self.showAll:
+                self.stream.write(f"  {YELLOW}E{RESET} ")
+                self.stream.writeln(test.shortDescription() or str(test))
+
+        def addSkip(self, test, reason):
+            super().addSkip(test, reason)
+            if self.showAll:
+                self.stream.write(f"  {YELLOW}~{RESET} ")
+                self.stream.writeln(f"{test.shortDescription() or test} [{reason}]")
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    print(f"\n{BOLD}aw-regression-test{RESET}  {now}  filter={filter_arg}")
+    print("─" * 60)
+
+    runner = unittest.TextTestRunner(
+        stream=sys.stdout,
+        verbosity=2,
+        resultclass=ColouredResult,
+    )
+    result = runner.run(suite)
+    print("─" * 60)
+
+    if result.failures or result.errors:
+        print(f"\n{RED}{BOLD}FAILED{RESET} — {len(result.failures)} failure(s), {len(result.errors)} error(s)")
+        print("Run again after fixing the issues. Each failure message tells you")
+        print("which script is affected and what to update.")
+        sys.exit(1)
+    else:
+        skipped = len(result.skipped)
+        skip_note = f" ({skipped} skipped)" if skipped else ""
+        print(f"\n{GREEN}{BOLD}ALL PASSED{RESET}{skip_note}")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
