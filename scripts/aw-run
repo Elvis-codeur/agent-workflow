@@ -158,10 +158,18 @@ while : ; do
     fi
     echo "=== aw-run iteration $ITER ==="
     set +e
-    archon workflow run "$WF_NAME" "$EPIC" "${WT_FLAG[@]}"
-    RC=$?
+    archon workflow run "$WF_NAME" "$EPIC" "${WT_FLAG[@]}" 2>&1 | tee /tmp/aw-run-archon-$$.log
+    RC=${PIPESTATUS[0]}
     set -e
     STATE="$(cat "$MARKER" 2>/dev/null || echo UNKNOWN)"
+    # Fallback: if archon reported success but decide's marker didn't reach us
+    # (e.g. marker written to worktree before the aw-decide.sh fix), trust archon.
+    if [[ "$STATE" == "UNKNOWN" && "$RC" -eq 0 ]] && \
+       grep -q "Workflow completed successfully" /tmp/aw-run-archon-$$.log 2>/dev/null; then
+        STATE="CONVERGED"
+        echo "  (fallback: archon reported success — treating as CONVERGED)"
+    fi
+    cat /tmp/aw-run-archon-$$.log >&2 2>/dev/null; rm -f /tmp/aw-run-archon-$$.log
     echo "  iteration $ITER finished: rc=$RC state=$STATE"
     case "$STATE" in
         CONVERGED) RC=0; break ;;
