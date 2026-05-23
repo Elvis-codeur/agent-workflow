@@ -53,7 +53,7 @@ wrapper:
 ```
 scripts/aw-run \
     --coder claude:sonnet \
-    --tester codex:gpt-5-codex \
+    --tester pi:sonnet \
     --master pi:kiro/minimax-m2-5 \
     --max-fix-attempts 3 \
     EPIC-AUTH-001
@@ -111,9 +111,9 @@ docs/
 
 | Role | Default | Override flag |
 |---|---|---|
-| master | `claude:sonnet` (Sonnet 4.6) | `--master PROVIDER:MODEL` |
-| coder | `codex:gpt-5-codex` | `--coder PROVIDER:MODEL` |
-| tester | `claude:sonnet` (Sonnet 4.6) | `--tester PROVIDER:MODEL` |
+| master | `pi:sonnet` | `--master PROVIDER:MODEL` |
+| coder  | `pi:sonnet` | `--coder PROVIDER:MODEL` |
+| tester | `pi:sonnet` | `--tester PROVIDER:MODEL` |
 | max fix attempts before arbitration | `3` | `--max-fix-attempts N` |
 | autocommit on green | **on** | `--no-autocommit` |
 | worktree cleanup on success | **on** | `--keep-worktree` |
