@@ -148,7 +148,7 @@ fi
 
 # Scripts for the master loop + gotchas index
 printf "\n  Scripts:\n"
-for s in aw-run aw-run-tests.sh aw-decide.sh gotchas-index.sh; do
+for s in aw-run aw-run-all.sh aw-run-tests.sh aw-decide.sh gotchas-index.sh; do
     if [[ -f "$SCRIPTS_SRC/$s" ]]; then
         copy_file "$SCRIPTS_SRC/$s" "$TARGET/scripts/$s"
         chmod +x "$TARGET/scripts/$s"
