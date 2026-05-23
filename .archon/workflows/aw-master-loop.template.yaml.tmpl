@@ -61,11 +61,15 @@ nodes:
   - id: configure
     depends_on: [read-epic]
     bash: |
-      python3 scripts/aw-configure.py \
-        $read-epic.output.epic_id \
-        $read-epic.output.scope \
-        $read-epic.output.tests_paths \
-        {{CONFIGURE_FLAGS}}
+      # Build optional flags from template-substituted booleans.
+      # Using shell variables avoids a trailing '\' before an empty
+      # {{CONFIGURE_FLAGS}} placeholder (which bash passes as a literal
+      # backslash arg to Python — BUG-015).
+      set -euo pipefail
+      _flags=""
+      [[ "{{SKIP_IMPLEMENT}}"   == "true" ]] && _flags="$_flags --skip-implement"
+      [[ "{{SKIP_WRITE_TESTS}}" == "true" ]] && _flags="$_flags --skip-write-tests"
+      python3 scripts/aw-configure.py $read-epic.output.epic_id $read-epic.output.scope $read-epic.output.tests_paths ${_flags:+$_flags}
     timeout: 30000
 
   # ---------------------------------------------------------------- coder
