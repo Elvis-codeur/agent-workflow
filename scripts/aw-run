@@ -169,7 +169,7 @@ while : ; do
         STATE="CONVERGED"
         echo "  (fallback: archon reported success — treating as CONVERGED)"
     fi
-    cat /tmp/aw-run-archon-$$.log >&2 2>/dev/null; rm -f /tmp/aw-run-archon-$$.log
+    rm -f /tmp/aw-run-archon-$$.log
     echo "  iteration $ITER finished: rc=$RC state=$STATE"
     case "$STATE" in
         CONVERGED) RC=0; break ;;
@@ -259,8 +259,7 @@ print('=' * 60)
 PYEOF
 }
 
-
-    echo "workflow converged after $ITER iteration(s) — cleaning worktree for $BRANCH"
+if [[ "$RC" -eq 0 && "$CLEAN_WORKTREE" -eq 1 ]]; then
     archon complete "$BRANCH" || echo "warning: 'archon complete' failed; clean up manually" >&2
 elif [[ "$RC" -eq 42 ]]; then
     echo "BLOCKED-ARBITRATION-EXHAUSTED after $ITER iteration(s) — worktree $BRANCH preserved for human review" >&2
