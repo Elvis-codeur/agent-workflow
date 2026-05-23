@@ -47,9 +47,9 @@ set -euo pipefail
 # throughput; gemini-3-flash is the fastest for simpler tasks.
 #
 # Override any role per-run:  scripts/aw-run --coder pi:github-copilot/claude-sonnet-4.6 EPIC
-DEFAULT_CODER="pi:github-copilot/gpt-5.3-codex"   # code-optimised, 400K ctx, high throughput
-DEFAULT_TESTER="pi:github-copilot/gemini-3-flash-preview"  # fast, sufficient for test writing
-DEFAULT_MASTER="pi:github-copilot/gpt-5.2"         # strong reasoning for arbitration
+DEFAULT_CODER="pi:github-copilot/claude-sonnet-4.6"  # strong coding, 1M ctx
+DEFAULT_TESTER="pi:github-copilot/gpt-5.3-codex"    # different model = independent signal; code-optimised
+DEFAULT_MASTER="pi:github-copilot/gpt-5.2"           # strong reasoning for arbitration
 CODER="$DEFAULT_CODER"
 TESTER="$DEFAULT_TESTER"
 MASTER="$DEFAULT_MASTER"
