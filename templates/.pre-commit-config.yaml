@@ -34,6 +34,17 @@ repos:
       - id: mixed-line-ending
         args: ["--fix=lf"]
 
+  # ── Gotchas index — always enabled when docs/gotchas/ exists ───────────────
+  - repo: local
+    hooks:
+      - id: gotchas-index
+        name: regenerate docs/gotchas/INDEX.md
+        language: system
+        entry: bash scripts/gotchas-index.sh
+        files: '^docs/gotchas/GOTCHA-.*\.md$'
+        pass_filenames: false
+        # Stages it back automatically; if it fails the commit aborts.
+
   # ── Python — ruff (lint + format) ─────────────────────────────────────────
   # Uncomment if your project uses Python.
   #
