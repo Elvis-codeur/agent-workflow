@@ -8,7 +8,7 @@
 
 | ID | Title | Severity | Status | Scope | Discovered |
 |----|-------|----------|--------|-------|-----------|
-| _none yet_ | | | | | |
+| [GOTCHA-001](GOTCHA-001-pi-bash-exit-1.md) | GOTCHA-001 — Pi bash tool reports grep exit 1 (no matches) as a tool failure | low | mitigated | "**/*" | 2026-05-23 |
 
 <!-- generated:start -->
 <!-- generated:end -->

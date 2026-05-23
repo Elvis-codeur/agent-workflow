@@ -133,3 +133,42 @@ markers in the template.
 
 Worktree cleanup runs `archon complete <branch>` only when the workflow exits
 zero; on failure the worktree is preserved so you can inspect it.
+
+---
+
+## Pi-specific behaviours and known gotchas
+
+### bash exit 1 reported as "Tool bash failed" (GOTCHA-001)
+
+Pi's `bash` tool treats **any** non-zero exit code as a tool failure.
+`grep` exits 1 when its pattern matches nothing — the POSIX "no results"
+signal, not an error. During workflow runs this produces a stream of
+`⚠️ Tool bash failed` warnings and causes the agent to retry pointlessly.
+
+**Mitigations shipped by this repo:**
+
+1. **`bash-normalize-exit.ts` extension** — installed to `.pi/extensions/`
+   by `install.sh`. Intercepts `bash` tool calls whose primary command is
+   `grep`, `find`, or `ls` and wraps them so exit code 1 → 0.
+   Exit codes ≥ 2 (bad regex, permission denied, etc.) are preserved.
+   The agent still reads the original stdout ("no matches", "not found").
+
+2. **Prompt hint** — the `implement` and `fix-blocked` nodes in
+   `aw-master-loop.template.yaml.tmpl` include:
+   > "Shell tip: append `|| true` to grep/find/ls existence checks"
+
+Full write-up: `docs/gotchas/GOTCHA-001-pi-bash-exit-1.md`.
+
+### Pi model ref format
+
+Pi in Archon requires `<catalog-provider>/<model-id>`, not a bare model
+name. `aw-run` validates this and exits 2 with an actionable error:
+
+```
+error: --coder model 'sonnet' is not a valid Pi model ref.
+  Pi requires format: <catalog-provider>/<model-id>
+  Examples: github-copilot/claude-sonnet-4.6  openai/gpt-4o  google/gemini-2.5-pro
+```
+
+Find your catalog provider in `~/.pi/agent/settings.json` →
+`"defaultProvider"`.

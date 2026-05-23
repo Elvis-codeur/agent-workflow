@@ -166,6 +166,16 @@ if [[ -f "$TEMPLATES/.pi/settings.json" ]]; then
     copy_file "$TEMPLATES/.pi/settings.json" "$TARGET/.pi/settings.json"
 fi
 
+# Pi extensions (project-local; auto-discovered by Pi from .pi/extensions/)
+if [[ -d "$TEMPLATES/.pi/extensions" ]]; then
+    printf "\n  Pi extensions:\n"
+    mkdir -p "$TARGET/.pi/extensions"
+    for _ext in "$TEMPLATES/.pi/extensions"/*.ts; do
+        [[ -e "$_ext" ]] || continue
+        copy_file "$_ext" "$TARGET/.pi/extensions/$(basename "$_ext")"
+    done
+fi
+
 # ── Post-install instructions ─────────────────────────────────────────────────
 printf "\n${GREEN}Done.${NC}\n\n"
 cat <<'EOF'
