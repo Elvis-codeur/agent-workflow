@@ -47,20 +47,19 @@ nodes:
         spec_section: { type: string }
 
   # ---------------------------------------------------------------- coder
+  # Single-shot: the /implement-epic skill instructs the agent to iterate
+  # internally until the epic is review-ready or genuinely blocked. Macro-
+  # level retries are handled by the outer aw-run recursion (see `decide`).
   - id: implement
     depends_on: [read-epic]
     provider: {{CODER_PROVIDER}}
     model: {{CODER_MODEL}}
-    loop:
-      until: REVIEW_READY
-      max_iterations: {{MAX_IMPL_ITERATIONS}}
-      fresh_context: false
     prompt: |
       You are the coder-agent. Run the /implement-epic skill on epic
       "$read-epic.output.epic_id". Implementation paths:
       $read-epic.output.implementation_paths.
-      When the epic is marked `review` in the progress file and all gates pass,
-      emit <promise>REVIEW_READY</promise> on its own line. Do not write tests.
+      Iterate internally until the epic is marked `review` in the progress
+      file and all gates pass. Do not write tests.
 
   # ---------------------------------------------------------------- tester (write)
   - id: write-tests
@@ -81,24 +80,23 @@ nodes:
                                     "$read-epic.output.epic_id"
     timeout: 600000
 
-  # ---------------------------------------------------------------- coder fix loop
+  # ---------------------------------------------------------------- coder fix (single-shot)
+  # The /fix-blocked skill tells the agent it has up to MAX_FIX_ATTEMPTS
+  # internal attempts. Cross-DAG iteration handled by aw-run recursion.
   - id: fix-blocked
     depends_on: [run-tests]
     when: "$run-tests.output != 'PASS'"
     provider: {{CODER_PROVIDER}}
     model: {{CODER_MODEL}}
-    loop:
-      until: REVIEW_READY
-      max_iterations: {{MAX_FIX_ATTEMPTS}}
-      fresh_context: false
     prompt: |
       You are the coder-agent. Run /fix-blocked on epic
       "$read-epic.output.epic_id". The tester reported:
 
       $run-tests.output
 
-      Fix ONLY implementation files. When gates pass and the epic is back to
-      `review`, emit <promise>REVIEW_READY</promise>.
+      You have up to {{MAX_FIX_ATTEMPTS}} internal attempts. Fix ONLY
+      implementation files. Stop when gates pass and the epic is `review`,
+      OR when you've exhausted attempts (mark the epic `blocked` with notes).
 
   - id: rerun-tests
     depends_on: [fix-blocked]
@@ -150,16 +148,10 @@ nodes:
   - id: ask-human
     depends_on: [arbitrate]
     when: "$arbitrate.output.verdict == 'unsure'"
-    loop:
-      until: HUMAN_DECIDED
-      max_iterations: 1
-      fresh_context: false
     prompt: |
       The master agent could not decide. Present the situation to the human
-      and ask them to pick `coder_right` or `tester_right`. When they answer,
-      emit <promise>HUMAN_DECIDED</promise>.
-    # interactive surface — Archon pauses for stdin
-    # (loop+max_iterations:1 is the current idiom for one-shot interactive)
+      and ask them to pick `coder_right` or `tester_right`. Print the chosen
+      verdict on the last line of your output.
 
   # ---------------------------------------------------------------- commit
   # >>> AUTOCOMMIT (stripped by scripts/aw-run when --no-autocommit)

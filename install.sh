@@ -134,9 +134,9 @@ copy_dir "$SKILLS_SRC" "$TARGET/docs/agent-rules/skills"
 printf "\n  Archon workflows:\n"
 if [[ -d "$WORKFLOWS_SRC" ]]; then
     # Only the template — never copy the gitignored .runs/ render cache.
-    if [[ -f "$WORKFLOWS_SRC/aw-master-loop.template.yaml" ]]; then
-        copy_file "$WORKFLOWS_SRC/aw-master-loop.template.yaml" \
-                  "$TARGET/.archon/workflows/aw-master-loop.template.yaml"
+    if [[ -f "$WORKFLOWS_SRC/aw-master-loop.template.yaml.tmpl" ]]; then
+        copy_file "$WORKFLOWS_SRC/aw-master-loop.template.yaml.tmpl" \
+                  "$TARGET/.archon/workflows/aw-master-loop.template.yaml.tmpl"
     fi
 fi
 
