@@ -113,12 +113,12 @@ human in the loop:
 
 ```bash
 scripts/aw-run EPIC-AUTH-001
-# defaults: master=pi:sonnet, coder=pi:sonnet,
-#           tester=pi:sonnet, max-fix=3, max-arb=3,
+# defaults: master=pi:github-copilot/claude-sonnet-4.6, coder=pi:github-copilot/claude-sonnet-4.6,
+#           tester=pi:github-copilot/claude-sonnet-4.6, max-fix=3, max-arb=3,
 #           autocommit ON, worktree cleanup ON.
 
 scripts/aw-run --coder pi:kiro/minimax-m2-5 \
-               --tester pi:sonnet \
+               --tester pi:github-copilot/claude-sonnet-4.6 \
                --master claude:opus \
                --max-fix-attempts 5 \
                --no-autocommit \
@@ -137,7 +137,7 @@ Under the hood:
    `ITERATE` / `FAILED`) that the wrapper reads to decide whether to recurse,
    clean up the worktree, or hard-fail with `BLOCKED-ARBITRATION-EXHAUSTED`.
 4. Each AI node can be assigned to **pi**, **claude**, or **codex** — mix
-   and match per role. Default for all three roles: `pi:sonnet`.
+   and match per role. Default for all three roles: `pi:github-copilot/claude-sonnet-4.6`.
 
 Requires `archon` v0.3.10+ in `PATH`. See `docs/archon-master-loop.md` for
 the full design and `skills/aw-master-loop/SKILL.md` for the arbitration

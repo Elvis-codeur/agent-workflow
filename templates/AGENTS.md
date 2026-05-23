@@ -82,12 +82,12 @@ without babysitting it:
 
 ```bash
 scripts/aw-run <EPIC-ID>
-# zero flags = defaults: master=pi:sonnet, coder=pi:sonnet,
-#              tester=pi:sonnet, max-fix=3, max-arb=3, autocommit ON,
+# zero flags = defaults: master=pi:github-copilot/claude-sonnet-4.6, coder=pi:github-copilot/claude-sonnet-4.6,
+#              tester=pi:github-copilot/claude-sonnet-4.6, max-fix=3, max-arb=3, autocommit ON,
 #              worktree cleanup ON.
 
 scripts/aw-run --coder pi:kiro/minimax-m2-5 \
-               --tester pi:sonnet \
+               --tester pi:github-copilot/claude-sonnet-4.6 \
                --master claude:opus \
                --max-fix-attempts 5 \
                --no-autocommit \

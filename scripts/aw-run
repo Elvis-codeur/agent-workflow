@@ -6,27 +6,36 @@
 #   scripts/aw-run [options] <EPIC-ID>
 #
 # Options:
-#   --coder    PROVIDER:MODEL           (default: pi:sonnet)
-#   --tester   PROVIDER:MODEL           (default: pi:sonnet)
-#   --master   PROVIDER:MODEL           (default: pi:sonnet)
+#   --coder    PROVIDER:MODEL           (default: pi:github-copilot/claude-sonnet-4.6)
+#   --tester   PROVIDER:MODEL           (default: pi:github-copilot/claude-sonnet-4.6)
+#   --master   PROVIDER:MODEL           (default: pi:github-copilot/claude-sonnet-4.6)
 #   --max-impl-iterations N             (default: 10)
 #   --max-fix-attempts   N              (default: 3)
 #   --max-arbitration-attempts N        (default: 3; on Nth unsure, hard-fail)
 #   --branch BRANCH                     (default: archon/epic-<EPIC-ID>)
+#   --from-branch BRANCH                (default: repo default branch / main)
 #   --no-autocommit                     skip the in-workflow commit node
 #   --keep-worktree                     do not run `archon complete` on success
 #   --dry-run                           render YAML and print path; do not run
 #
 # PROVIDER must be one of: pi, claude, codex.
+# For pi, MODEL must be <catalog-provider>/<model-id>, e.g.:
+#   pi:github-copilot/claude-sonnet-4.6
+#   pi:openai/gpt-4o
+#   pi:google/gemini-2.5-pro
+#   pi:openrouter/qwen/qwen3-coder  (nested slash OK)
 #
-# Defaults: all three roles use pi:sonnet. Override per-run with the flags
-# above. Autocommit and worktree cleanup are ON by default.
+# Defaults: all three roles use the Pi provider with your configured default
+# (github-copilot/claude-sonnet-4.6). Override per-run with the flags above.
+# Autocommit and worktree cleanup are ON by default.
 
 set -euo pipefail
 
-CODER="pi:sonnet"
-TESTER="pi:sonnet"
-MASTER="pi:sonnet"
+DEFAULT_PI_MODEL="pi:github-copilot/claude-sonnet-4.6"
+CODER="$DEFAULT_PI_MODEL"
+TESTER="$DEFAULT_PI_MODEL"
+MASTER="$DEFAULT_PI_MODEL"
+FROM_BRANCH=""
 MAX_IMPL=10
 MAX_FIX=3
 MAX_ARB=3
@@ -46,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         --max-fix-attempts)    MAX_FIX="$2"; shift 2 ;;
         --max-arbitration-attempts) MAX_ARB="$2"; shift 2 ;;
         --branch)              BRANCH="$2"; shift 2 ;;
+        --from-branch)         FROM_BRANCH="$2"; shift 2 ;;
         --no-autocommit)       AUTOCOMMIT=0; shift ;;
         --keep-worktree)       CLEAN_WORKTREE=0; shift ;;
         --dry-run)             DRY=1; shift ;;
@@ -59,10 +69,25 @@ done
 : "${EPIC:?EPIC-ID is required}"
 BRANCH="${BRANCH:-archon/epic-${EPIC}}"
 
-split() { IFS=':' read -r prov mdl <<<"$1"; echo "$prov" "$mdl"; }
+# Split PROVIDER:MODEL — for pi, MODEL may contain slashes (e.g. github-copilot/claude-sonnet-4.6).
+split() { local prov mdl; prov="${1%%:*}"; mdl="${1#*:}"; echo "$prov" "$mdl"; }
 read -r CODER_PROV  CODER_MDL  < <(split "$CODER")
 read -r TESTER_PROV TESTER_MDL < <(split "$TESTER")
 read -r MASTER_PROV MASTER_MDL < <(split "$MASTER")
+
+# Validate Pi model refs: must contain a '/' (catalog-provider/model-id).
+check_pi_model() {
+    local role="$1" prov="$2" mdl="$3"
+    if [[ "$prov" == "pi" && "$mdl" != */* ]]; then
+        echo "error: $role model '$mdl' is not a valid Pi model ref." >&2
+        echo "  Pi requires format: <catalog-provider>/<model-id>" >&2
+        echo "  Examples: github-copilot/claude-sonnet-4.6  openai/gpt-4o  google/gemini-2.5-pro" >&2
+        exit 2
+    fi
+}
+check_pi_model "--coder"  "$CODER_PROV"  "$CODER_MDL"
+check_pi_model "--tester" "$TESTER_PROV" "$TESTER_MDL"
+check_pi_model "--master" "$MASTER_PROV" "$MASTER_MDL"
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 TEMPLATE="$REPO_ROOT/.archon/workflows/aw-master-loop.template.yaml.tmpl"
@@ -119,6 +144,7 @@ while : ; do
     ITER=$((ITER+1))
     if [[ "$ITER" -eq 1 ]]; then
         WT_FLAG=(--branch "$BRANCH")
+        [[ -n "$FROM_BRANCH" ]] && WT_FLAG+=(--from-branch "$FROM_BRANCH")
     else
         WT_FLAG=(--no-worktree)
     fi
