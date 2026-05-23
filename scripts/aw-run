@@ -6,9 +6,9 @@
 #   scripts/aw-run [options] <EPIC-ID>
 #
 # Options:
-#   --coder    PROVIDER:MODEL           (default: codex:gpt-5-codex)
-#   --tester   PROVIDER:MODEL           (default: claude:sonnet)
-#   --master   PROVIDER:MODEL           (default: claude:sonnet)
+#   --coder    PROVIDER:MODEL           (default: pi:sonnet)
+#   --tester   PROVIDER:MODEL           (default: pi:sonnet)
+#   --master   PROVIDER:MODEL           (default: pi:sonnet)
 #   --max-impl-iterations N             (default: 10)
 #   --max-fix-attempts   N              (default: 3)
 #   --max-arbitration-attempts N        (default: 3; on Nth unsure, hard-fail)
@@ -19,15 +19,14 @@
 #
 # PROVIDER must be one of: pi, claude, codex.
 #
-# Defaults match the project policy: master = claude sonnet 4.6, coder =
-# gpt-5-codex, tester = claude sonnet 4.6. Override per-run with the flags
+# Defaults: all three roles use pi:sonnet. Override per-run with the flags
 # above. Autocommit and worktree cleanup are ON by default.
 
 set -euo pipefail
 
-CODER="codex:gpt-5-codex"
-TESTER="claude:sonnet"
-MASTER="claude:sonnet"
+CODER="pi:sonnet"
+TESTER="pi:sonnet"
+MASTER="pi:sonnet"
 MAX_IMPL=10
 MAX_FIX=3
 MAX_ARB=3
