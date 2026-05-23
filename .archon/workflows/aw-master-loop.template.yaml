@@ -114,14 +114,20 @@ nodes:
     when: "$rerun-tests.output != 'PASS'"
     # master provider/model inherited from top level
     prompt: |
-      Coder and tester disagree on epic "$read-epic.output.epic_id".
-      Latest test output:
+      Run the /aw-master-loop skill on epic "$read-epic.output.epic_id".
+      Coder and tester disagree after retries.
 
-      $rerun-tests.output
+      Inputs already gathered for you:
+      - epic: $read-epic.output
+      - test output: $rerun-tests.output
+      - run id: $WORKFLOW_ID
+      - max arbitration attempts: $MAX_ARBITRATION_ATTEMPTS  (env)
+      - counter file: .archon/state/arbitration-count-$read-epic.output.epic_id
 
-      Read the epic acceptance criteria, the diff (`git diff`), and the last
-      `review:` and `blocked:` notes in the progress file. Decide who is right.
-      Output strict JSON.
+      Follow the skill exactly: gather 7 inputs (including
+      docs/gotchas/INDEX.md), classify into one of 8 buckets, check the
+      counter, emit strict JSON. Do not edit any file other than the
+      counter.
     allowed_tools: ["Read", "Grep", "Glob", "Bash"]
     output_format:
       type: object
@@ -132,6 +138,14 @@ nodes:
           enum: [coder_right, tester_right, unsure]
         rationale: { type: string }
         confidence: { type: number }
+        bucket: { type: number }
+        flags:
+          type: object
+          properties:
+            spec_outdated: { type: boolean }
+            scope_violation: { type: [string, "null"] }
+            gotcha_id: { type: [string, "null"] }
+            exhausted: { type: boolean }
 
   - id: ask-human
     depends_on: [arbitrate]

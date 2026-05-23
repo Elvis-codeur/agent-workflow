@@ -11,6 +11,7 @@
 #   --master   PROVIDER:MODEL           (default: claude:sonnet)
 #   --max-impl-iterations N             (default: 10)
 #   --max-fix-attempts   N              (default: 3)
+#   --max-arbitration-attempts N        (default: 3; on Nth unsure, hard-fail)
 #   --branch BRANCH                     (default: archon/epic-<EPIC-ID>)
 #   --no-autocommit                     skip the in-workflow commit node
 #   --keep-worktree                     do not run `archon complete` on success
@@ -29,12 +30,13 @@ TESTER="claude:sonnet"
 MASTER="claude:sonnet"
 MAX_IMPL=10
 MAX_FIX=3
+MAX_ARB=3
 BRANCH=""
 DRY=0
 AUTOCOMMIT=1
 CLEAN_WORKTREE=1
 
-usage() { sed -n '2,25p' "$0"; }
+usage() { sed -n '2,28p' "$0"; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -43,6 +45,7 @@ while [[ $# -gt 0 ]]; do
         --master)              MASTER="$2"; shift 2 ;;
         --max-impl-iterations) MAX_IMPL="$2"; shift 2 ;;
         --max-fix-attempts)    MAX_FIX="$2"; shift 2 ;;
+        --max-arbitration-attempts) MAX_ARB="$2"; shift 2 ;;
         --branch)              BRANCH="$2"; shift 2 ;;
         --no-autocommit)       AUTOCOMMIT=0; shift ;;
         --keep-worktree)       CLEAN_WORKTREE=0; shift ;;
@@ -92,6 +95,8 @@ echo "  coder       = $CODER_PROV / $CODER_MDL"
 echo "  tester      = $TESTER_PROV / $TESTER_MDL"
 echo "  master      = $MASTER_PROV / $MASTER_MDL"
 echo "  branch      = $BRANCH"
+echo "  max-fix     = $MAX_FIX"
+echo "  max-arb     = $MAX_ARB"
 echo "  autocommit  = $AUTOCOMMIT"
 echo "  cleanup     = $CLEAN_WORKTREE"
 
@@ -100,6 +105,9 @@ if [[ "$DRY" -eq 1 ]]; then
 fi
 
 archon validate workflows "$WF_NAME"
+
+mkdir -p "$REPO_ROOT/.archon/state"
+export MAX_ARBITRATION_ATTEMPTS="$MAX_ARB"
 
 set +e
 archon workflow run "$WF_NAME" "$EPIC" --branch "$BRANCH"

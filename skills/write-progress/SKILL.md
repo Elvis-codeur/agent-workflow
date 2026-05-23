@@ -76,6 +76,9 @@ top-level keys:
 #
 # Status values: planned | in_progress | review | complete | blocked
 # depends_on:   list of epic ids that must be status: complete before this starts
+# gotchas:      optional list of off-epic bugs discovered during this epic.
+#               Each entry has `id` and a ≤ 5-line `summary`. Long-form lives
+#               at docs/gotchas/<id>-*.md. See skills/record-gotcha/SKILL.md.
 # ────────────────────────────────────────────────────────────────────────────
 
 version: 1
@@ -180,8 +183,27 @@ epics:
       YYYY-MM-DD. Blocked on <exact reason>. <what would unblock it>.
 ```
 
-`review:` and `blocked:` are written by agents after work, not by the
-progress-file author. Leave them absent on new epics.
+```yaml
+    gotchas:                        # off-epic bugs discovered during this epic
+      - id: GOTCHA-007              # references docs/gotchas/GOTCHA-007-*.md
+        summary: |
+          TDLib segfaults when its sqlite db is on NTFS under WSL (silent
+          O_DIRECT rejection). Move td_db/ to ext4; do not symlink. See
+          docs/gotchas/GOTCHA-007-tdlib-ntfs-segfault.md.
+      - id: GOTCHA-inline-2026-05-23-pnpm-npmrc-scope
+        summary: |
+          pnpm 9 ignores node-linker=hoisted in a workspace package's
+          .npmrc; the directive must live at the workspace root only.
+```
+
+`gotchas:` records bugs the agent hit that are NOT in
+`implementation.acceptance` — environment quirks, toolchain bugs,
+cross-filesystem hazards, bad codegen. Each entry is at most 5 lines; if
+that is not enough, the agent opens a long-form `docs/gotchas/GOTCHA-NNN-*.md`
+and references it by `id`. Authoring procedure: `skills/record-gotcha/SKILL.md`.
+
+`review:`, `blocked:`, and `gotchas:` are written by agents during work, not
+by the progress-file author. Leave them absent on new epics.
 
 ---
 

@@ -40,14 +40,32 @@ write that file. Document it explicitly in your `review:` note.
 
 Read these documents in order. Do not skip.
 
-1. `AGENTS.md` — invariants, commit conventions, hook rules
-2. `docs/agent-rules/skills/commit/SKILL.md` — the gate you must pass before
+1. **`docs/gotchas/INDEX.md`** — every gotcha discovered by prior agents. If
+   any row's `scope` overlaps your `implementation.paths` or the failing
+   test's path, open the linked `GOTCHA-NNN-*.md` and read it before
+   writing code. Skipping this step is a token-waste violation.
+2. `AGENTS.md` — invariants, commit conventions, hook rules
+3. `docs/agent-rules/skills/commit/SKILL.md` — the gate you must pass before
    marking `review`
-3. The relevant progress file — find your epic by ID
-4. The spec section named by the epic's `area:` field
+4. The relevant progress file — find your epic by ID. Pay attention to the
+   epic's `gotchas:` list — those are pre-existing land mines for this work.
+5. The spec section named by the epic's `area:` field
 
 When the spec and the progress file disagree, **the spec wins**. Raise the
 conflict in your `review:` note but implement to the spec.
+
+---
+
+## Step 0a — The gotcha rule (applies through every step below)
+
+If at any point you hit a bug that is NOT covered by
+`implementation.acceptance`, stop. Apply the gotcha-vs-epic test
+(`/record-gotcha`): would fixing this bug satisfy any acceptance line?
+
+- **Yes** → it's the epic, keep going.
+- **No**  → invoke `/record-gotcha` before you fix anything else. Silently
+  fixing an off-epic bug creates tech debt the next agent pays for. After
+  recording, resume from the step you paused.
 
 ---
 
