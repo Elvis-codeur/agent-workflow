@@ -39,19 +39,22 @@ leaving the rest of the JSON as unquoted bare-words. Bash then hits `(` in
 
 ## Fix
 
-In the `decide` bash node: **do not double-quote Archon node-output
+In any `bash:` node: **do not double-quote Archon node-output
 substitutions**. Let Archon's single-quoting stand on its own:
 
 ```yaml
 # WRONG — "..." wraps Archon's '...' producing "'{...'"
+bash scripts/aw-run-tests.sh "$read-epic.output.scope"
 bash scripts/aw-decide.sh "$arbitrate.output"
 
 # CORRECT — Archon's single-quoting is sufficient
+bash scripts/aw-run-tests.sh $read-epic.output.scope
 bash scripts/aw-decide.sh $arbitrate.output
 ```
 
 Only literal strings that you write yourself need quoting. Any
-`$nodeId.output` placeholder should be left **bare** in the template.
+`$nodeId.output` or `$nodeId.output.field` placeholder must be left
+**bare** (no surrounding `"..."`) in the template.
 
 ## Prevention
 
