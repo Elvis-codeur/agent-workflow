@@ -51,8 +51,8 @@ decide() {
 
     # Iterate: arbitration produced a decisive verdict (coder/tester right),
     # OR the human picked one in the ask-human node.
-    if [[ "$ARB_JSON" == *'"verdict": "coder_right"'* ]] || \
-       [[ "$ARB_JSON" == *'"verdict": "tester_right"'* ]] || \
+    if [[ "$ARB_JSON" == *coder_right* ]] || \
+       [[ "$ARB_JSON" == *tester_right* ]] || \
        [[ -n "$HUMAN_OUT" ]]; then
         echo ITERATE; return
     fi
