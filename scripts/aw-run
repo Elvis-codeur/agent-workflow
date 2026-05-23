@@ -171,13 +171,94 @@ while : ; do
     esac
 done
 
-if [[ "$RC" -eq 0 && "$CLEAN_WORKTREE" -eq 1 ]]; then
+# ── Rate-limit diagnostic helper ───────────────────────────────────────────
+# Reads the Archon run log and aw-run-all log (if present) for
+# claude.rate_limit_event JSON entries, then prints a human-readable summary.
+print_rate_limit_info() {
+  local log_sources=()
+  # aw-run-all saves per-epic logs here
+  [[ -f "$REPO_ROOT/.archon/run-all-logs/${EPIC}.log" ]] && \
+    log_sources+=("$REPO_ROOT/.archon/run-all-logs/${EPIC}.log")
+  # Archon writes per-run JSONL logs here; find the most recent one
+  local archon_log
+  archon_log="$(find ~/.archon/workspaces -name '*.jsonl' -not -path '*/sessions/*' \
+    -newer "$REPO_ROOT/.archon/state" 2>/dev/null | sort -t/ -k1 | tail -1)"
+  [[ -n "$archon_log" ]] && log_sources+=("$archon_log")
+
+  if [[ ${#log_sources[@]} -eq 0 ]]; then return; fi
+
+  python3 - "${log_sources[@]}" <<'PYEOF'
+import sys, json, time
+from datetime import datetime
+
+events = []
+for path in sys.argv[1:]:
+    try:
+        for line in open(path):
+            line = line.strip()
+            if not line: continue
+            try:
+                obj = json.loads(line)
+                if obj.get('msg') == 'claude.rate_limit_event':
+                    events.append(obj)
+            except Exception:
+                pass
+    except OSError:
+        pass
+
+if not events:
+    sys.exit(0)
+
+print()
+print('=' * 60)
+print('  ⛔  RATE LIMIT DETECTED IN THIS RUN')
+print('=' * 60)
+seen = set()
+for e in events:
+    info = e.get('rateLimitInfo', {})
+    key = (info.get('rateLimitType'), info.get('overageDisabledReason'))
+    if key in seen: continue
+    seen.add(key)
+    limit_type = info.get('rateLimitType', 'unknown')
+    reason     = info.get('overageDisabledReason', '')
+    reset_ts   = info.get('resetsAt')
+    overage    = info.get('overageStatus', '')
+
+    desc_map = {
+        'five_hour': '5-hour rolling window',
+        'daily':     'daily token quota',
+        'weekly':    'weekly token quota',
+        'monthly':   'monthly token quota',
+    }
+    print(f'  Limit type : {desc_map.get(limit_type, limit_type)}')
+    if reason:    print(f'  Reason     : {reason}')
+    if overage:   print(f'  Overage    : {overage}')
+    if reset_ts:
+        dt   = datetime.fromtimestamp(reset_ts)
+        mins = max(0, int((reset_ts - time.time()) / 60))
+        wait = f'{mins} min' if mins < 120 else f'{mins//60}h {mins%60}min'
+        print(f'  Resets at  : {dt.strftime("%Y-%m-%d %H:%M:%S")} (in {wait})')
+print()
+print('  \U0001f4a1 Suggestions:')
+print('     Wait for the reset, then re-run:')
+print('       scripts/aw-run [--from EPIC-ID]')
+print()
+print('     Or switch to a non-throttled model now:')
+print('       scripts/aw-run --coder pi:github-copilot/gpt-5.3-codex  (current default)')
+print('       scripts/aw-run --coder pi:github-copilot/gemini-3-flash-preview')
+print('       scripts/aw-run --coder pi:github-copilot/gpt-5.2')
+print('=' * 60)
+PYEOF
+}
+
+
     echo "workflow converged after $ITER iteration(s) — cleaning worktree for $BRANCH"
     archon complete "$BRANCH" || echo "warning: 'archon complete' failed; clean up manually" >&2
 elif [[ "$RC" -eq 42 ]]; then
     echo "BLOCKED-ARBITRATION-EXHAUSTED after $ITER iteration(s) — worktree $BRANCH preserved for human review" >&2
 else
     echo "workflow failed (rc=$RC) after $ITER iteration(s) — worktree $BRANCH preserved" >&2
+    print_rate_limit_info
 fi
 
 exit "$RC"
