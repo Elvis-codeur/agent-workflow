@@ -10,8 +10,9 @@ When guidance conflicts, follow this order:
 1. **Mechanical gates** — pre-commit hooks, CI, type checkers, schema
    validators. If a gate fails, fix the cause; never bypass.
 2. **Skills** at `docs/agent-rules/skills/<name>/SKILL.md`. Aliased into
-   `.claude/skills/` and `.opencode/commands/`. Invoke when starting a
-   recurring workflow.
+   `.claude/skills/`, `.opencode/commands/`, and `.pi/skills/`. Invoke when
+   starting a recurring workflow. Codex has no native skill loader — open
+   the SKILL.md file directly and follow its body.
 3. **This file** — invariants that cannot be mechanized.
 4. **Architecture docs** — `docs/specs/` and `docs/agent-rules/`.
 
@@ -67,10 +68,47 @@ Use `/commit` to draft the message from the diff.
 | Implement an epic (coder-agent) | `/implement-epic` | `docs/agent-rules/skills/implement-epic/` |
 | Write or run tests + update progress | `/test-and-progress` | `docs/agent-rules/skills/test-and-progress/` |
 | Fix a blocked epic (coder-agent) | `/fix-blocked` | `docs/agent-rules/skills/fix-blocked/` |
+| Master arbitration (coder ↔ tester tie-break) | `/aw-master-loop` | `docs/agent-rules/skills/aw-master-loop/` |
+| Record an off-epic bug for future agents | `/record-gotcha` | `docs/agent-rules/skills/record-gotcha/` |
 | Lint + test + commit | `/commit` | `docs/agent-rules/skills/commit/` |
 
 When invoking from Codex / ChatGPT (no skill mechanism): open the SKILL.md
 file directly. Its body is the procedure.
+
+## Run a full epic end-to-end (Archon master loop)
+
+For any epic in a `progress.*.yaml` file, you can run the coder/tester loop
+without babysitting it:
+
+```bash
+scripts/aw-run <EPIC-ID>
+# zero flags = defaults: master=claude:sonnet, coder=codex:gpt-5-codex,
+#              tester=claude:sonnet, max-fix=3, max-arb=3, autocommit ON,
+#              worktree cleanup ON.
+
+scripts/aw-run --coder pi:kiro/minimax-m2-5 \
+               --tester claude:sonnet \
+               --master claude:opus \
+               --max-fix-attempts 5 \
+               --no-autocommit \
+               EPIC-AUTH-001
+```
+
+The wrapper renders `.archon/workflows/aw-master-loop.template.yaml` with
+the chosen per-role provider/model triples and invokes Archon in an
+isolated git worktree. See `docs/archon-master-loop.md` for the full
+design. Requires `archon` v0.3.10+ in `PATH`
+(https://github.com/coleam00/Archon).
+
+### Off-epic bugs (gotchas)
+
+If an agent hits a bug NOT covered by `implementation.acceptance` while
+working an epic (toolchain quirk, env-specific path, cross-filesystem
+hazard), they must invoke `/record-gotcha` and append an entry to the
+epic's `gotchas:` list before continuing. Short entries are inline (≤ 5
+lines); anything bigger gets a long-form `docs/gotchas/GOTCHA-NNN-*.md`
+with reproduction conditions, indexed automatically by
+`scripts/gotchas-index.sh` (runs in the pre-commit hook).
 
 ## What NOT to do
 

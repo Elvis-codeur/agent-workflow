@@ -16,6 +16,20 @@ This skill defines:
 - how to update the matching `progress.*.yaml` entry
 - what to write when tests pass, xfail, fail, or cannot run
 
+## Step 0 — Read the gotchas index before writing or running
+
+Run `cat docs/gotchas/INDEX.md`. If any row's `scope` overlaps your
+`tests.paths` or the code under test, open the matching `GOTCHA-NNN-*.md`.
+Gotchas often explain why a test fails for reasons unrelated to the
+implementation — recording them as `blocked:` is wrong and wastes an
+arbitration cycle.
+
+**The gotcha rule.** If, while writing or running tests, you discover a
+bug that is NOT in `tests.acceptance` (a fixture that segfaults under
+WSL/NTFS, a flaky test caused by a toolchain bug, a CI runner quirk),
+stop and invoke `/record-gotcha`. Do not bury the finding in a
+`blocked:` note — it will be lost the moment the epic closes.
+
 ## Two operating modes — read the task carefully
 
 This skill has two distinct modes. Which one you are in is determined by the

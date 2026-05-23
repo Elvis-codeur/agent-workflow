@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# aw-run — render the aw-master-loop template with user-chosen models and
+# invoke `archon workflow run` in an isolated worktree.
+#
+# Usage:
+#   scripts/aw-run [options] <EPIC-ID>
+#
+# Options:
+#   --coder    PROVIDER:MODEL           (default: codex:gpt-5-codex)
+#   --tester   PROVIDER:MODEL           (default: claude:sonnet)
+#   --master   PROVIDER:MODEL           (default: claude:sonnet)
+#   --max-impl-iterations N             (default: 10)
+#   --max-fix-attempts   N              (default: 3)
+#   --max-arbitration-attempts N        (default: 3; on Nth unsure, hard-fail)
+#   --branch BRANCH                     (default: archon/epic-<EPIC-ID>)
+#   --no-autocommit                     skip the in-workflow commit node
+#   --keep-worktree                     do not run `archon complete` on success
+#   --dry-run                           render YAML and print path; do not run
+#
+# PROVIDER must be one of: pi, claude, codex.
+#
+# Defaults match the project policy: master = claude sonnet 4.6, coder =
+# gpt-5-codex, tester = claude sonnet 4.6. Override per-run with the flags
+# above. Autocommit and worktree cleanup are ON by default.
+
+set -euo pipefail
+
+CODER="codex:gpt-5-codex"
+TESTER="claude:sonnet"
+MASTER="claude:sonnet"
+MAX_IMPL=10
+MAX_FIX=3
+MAX_ARB=3
+BRANCH=""
+DRY=0
+AUTOCOMMIT=1
+CLEAN_WORKTREE=1
+
+usage() { sed -n '2,28p' "$0"; }
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --coder)               CODER="$2"; shift 2 ;;
+        --tester)              TESTER="$2"; shift 2 ;;
+        --master)              MASTER="$2"; shift 2 ;;
+        --max-impl-iterations) MAX_IMPL="$2"; shift 2 ;;
+        --max-fix-attempts)    MAX_FIX="$2"; shift 2 ;;
+        --max-arbitration-attempts) MAX_ARB="$2"; shift 2 ;;
+        --branch)              BRANCH="$2"; shift 2 ;;
+        --no-autocommit)       AUTOCOMMIT=0; shift ;;
+        --keep-worktree)       CLEAN_WORKTREE=0; shift ;;
+        --dry-run)             DRY=1; shift ;;
+        -h|--help)             usage; exit 0 ;;
+        --) shift; break ;;
+        -*) echo "unknown flag: $1" >&2; usage >&2; exit 2 ;;
+        *)  EPIC="$1"; shift ;;
+    esac
+done
+
+: "${EPIC:?EPIC-ID is required}"
+BRANCH="${BRANCH:-archon/epic-${EPIC}}"
+
+split() { IFS=':' read -r prov mdl <<<"$1"; echo "$prov" "$mdl"; }
+read -r CODER_PROV  CODER_MDL  < <(split "$CODER")
+read -r TESTER_PROV TESTER_MDL < <(split "$TESTER")
+read -r MASTER_PROV MASTER_MDL < <(split "$MASTER")
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+TEMPLATE="$REPO_ROOT/.archon/workflows/aw-master-loop.template.yaml"
+RUNS_DIR="$REPO_ROOT/.archon/workflows/.runs"
+mkdir -p "$RUNS_DIR"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${EPIC//[^A-Za-z0-9]/_}"
+WF_NAME="aw-master-loop-$RUN_ID"
+OUT="$RUNS_DIR/$WF_NAME.yaml"
+
+sed \
+    -e "s|{{RUN_ID}}|$RUN_ID|g" \
+    -e "s|{{MASTER_PROVIDER}}|$MASTER_PROV|g" \
+    -e "s|{{MASTER_MODEL}}|$MASTER_MDL|g" \
+    -e "s|{{CODER_PROVIDER}}|$CODER_PROV|g" \
+    -e "s|{{CODER_MODEL}}|$CODER_MDL|g" \
+    -e "s|{{TESTER_PROVIDER}}|$TESTER_PROV|g" \
+    -e "s|{{TESTER_MODEL}}|$TESTER_MDL|g" \
+    -e "s|{{MAX_IMPL_ITERATIONS}}|$MAX_IMPL|g" \
+    -e "s|{{MAX_FIX_ATTEMPTS}}|$MAX_FIX|g" \
+    "$TEMPLATE" > "$OUT"
+
+if [[ "$AUTOCOMMIT" -eq 0 ]]; then
+    # strip the commit node block between the AUTOCOMMIT markers
+    sed -i '/>>> AUTOCOMMIT/,/<<< AUTOCOMMIT/d' "$OUT"
+fi
+
+echo "rendered → $OUT"
+echo "  coder       = $CODER_PROV / $CODER_MDL"
+echo "  tester      = $TESTER_PROV / $TESTER_MDL"
+echo "  master      = $MASTER_PROV / $MASTER_MDL"
+echo "  branch      = $BRANCH"
+echo "  max-fix     = $MAX_FIX"
+echo "  max-arb     = $MAX_ARB"
+echo "  autocommit  = $AUTOCOMMIT"
+echo "  cleanup     = $CLEAN_WORKTREE"
+
+if [[ "$DRY" -eq 1 ]]; then
+    exit 0
+fi
+
+archon validate workflows "$WF_NAME"
+
+mkdir -p "$REPO_ROOT/.archon/state"
+export MAX_ARBITRATION_ATTEMPTS="$MAX_ARB"
+MARKER="$REPO_ROOT/.archon/state/iterate-decision-${EPIC//[^A-Za-z0-9]/_}"
+rm -f "$MARKER"
+
+# ── Loop: each iteration is one Archon DAG run. The workflow's final
+# `decide` node writes CONVERGED / EXHAUSTED / ITERATE / FAILED to MARKER;
+# we read it after each run and loop or break accordingly.
+ITER=0
+RC=0
+while : ; do
+    ITER=$((ITER+1))
+    if [[ "$ITER" -eq 1 ]]; then
+        WT_FLAG=(--branch "$BRANCH")
+    else
+        WT_FLAG=(--no-worktree)
+    fi
+    echo "=== aw-run iteration $ITER ==="
+    set +e
+    archon workflow run "$WF_NAME" "$EPIC" "${WT_FLAG[@]}"
+    RC=$?
+    set -e
+    STATE="$(cat "$MARKER" 2>/dev/null || echo UNKNOWN)"
+    echo "  iteration $ITER finished: rc=$RC state=$STATE"
+    case "$STATE" in
+        CONVERGED) RC=0; break ;;
+        EXHAUSTED) RC=42; break ;;   # BLOCKED-ARBITRATION-EXHAUSTED
+        ITERATE)   continue ;;
+        *)         break ;;          # FAILED / UNKNOWN -> exit with archon's RC
+    esac
+done
+
+if [[ "$RC" -eq 0 && "$CLEAN_WORKTREE" -eq 1 ]]; then
+    echo "workflow converged after $ITER iteration(s) — cleaning worktree for $BRANCH"
+    archon complete "$BRANCH" || echo "warning: 'archon complete' failed; clean up manually" >&2
+elif [[ "$RC" -eq 42 ]]; then
+    echo "BLOCKED-ARBITRATION-EXHAUSTED after $ITER iteration(s) — worktree $BRANCH preserved for human review" >&2
+else
+    echo "workflow failed (rc=$RC) after $ITER iteration(s) — worktree $BRANCH preserved" >&2
+fi
+
+exit "$RC"

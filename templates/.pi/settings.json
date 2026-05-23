@@ -1,0 +1,8 @@
+{
+  "//": "Pi settings shipped by agent-workflow. Keeps Pi aligned with the same skill tree as Claude Code and OpenCode. Safe to extend with project-specific entries below.",
+  "skills": [
+    ".pi/skills",
+    "../.claude/skills",
+    "~/.claude/skills"
+  ]
+}

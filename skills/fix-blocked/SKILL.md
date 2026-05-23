@@ -45,9 +45,14 @@ for correcting wrong tests; you are responsible for correcting wrong code.
 
 ---
 
-## Step 0 — Read the blocked note carefully
+## Step 0 — Read the gotchas index, then the blocked note
 
-The `blocked:` field written by the tester-agent is your primary input.
+Before anything else, `cat docs/gotchas/INDEX.md` and read every row whose
+`scope` overlaps the failing test's path or your `implementation.paths`.
+Many "blocked" reports are gotchas in disguise — env, toolchain, filesystem,
+codegen quirks. Catching one here saves a full fix-test-arbitrate cycle.
+
+The `blocked:` field written by the tester-agent is your second input.
 Read it before opening any implementation file.
 
 A well-written `blocked:` note tells you:
@@ -60,6 +65,14 @@ A well-written `blocked:` note tells you:
 If the note is vague ("tests are failing"), do not guess. Use
 `/test-and-progress` (Mode B) to rerun the tests and produce a precise note
 before attempting a fix.
+
+**The gotcha rule.** If, during your fix, you find that the failure is
+caused by something outside `implementation.acceptance` (a toolchain quirk,
+an env-specific path, a cross-filesystem hazard), stop and invoke
+`/record-gotcha` before continuing. Then resume the fix or, if the gotcha
+IS the cause and there is no code change needed in `implementation.paths`,
+leave a `blocked:` note citing the gotcha id and exit — the master will
+route correctly.
 
 Example of a note you can act on:
 

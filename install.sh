@@ -28,6 +28,9 @@ fi
 
 TEMPLATES="$SCRIPT_DIR/templates"
 SKILLS_SRC="$SCRIPT_DIR/skills"
+WORKFLOWS_SRC="$SCRIPT_DIR/.archon/workflows"
+GOTCHAS_SRC="$SCRIPT_DIR/docs/gotchas"
+SCRIPTS_SRC="$SCRIPT_DIR/scripts"
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 FORCE=false
@@ -127,10 +130,41 @@ chmod +x "$TARGET/scripts/check-invariants.sh"
 printf "\n  Skills:\n"
 copy_dir "$SKILLS_SRC" "$TARGET/docs/agent-rules/skills"
 
+# Archon workflows (master-loop template)
+printf "\n  Archon workflows:\n"
+if [[ -d "$WORKFLOWS_SRC" ]]; then
+    # Only the template — never copy the gitignored .runs/ render cache.
+    if [[ -f "$WORKFLOWS_SRC/aw-master-loop.template.yaml" ]]; then
+        copy_file "$WORKFLOWS_SRC/aw-master-loop.template.yaml" \
+                  "$TARGET/.archon/workflows/aw-master-loop.template.yaml"
+    fi
+fi
+
+# Gotchas registry (template + seed INDEX)
+printf "\n  Gotchas registry:\n"
+if [[ -d "$GOTCHAS_SRC" ]]; then
+    copy_dir "$GOTCHAS_SRC" "$TARGET/docs/gotchas"
+fi
+
+# Scripts for the master loop + gotchas index
+printf "\n  Scripts:\n"
+for s in aw-run aw-run-tests.sh aw-decide.sh gotchas-index.sh; do
+    if [[ -f "$SCRIPTS_SRC/$s" ]]; then
+        copy_file "$SCRIPTS_SRC/$s" "$TARGET/scripts/$s"
+        chmod +x "$TARGET/scripts/$s"
+    fi
+done
+
 # Symlinks
 printf "\n  Symlinks:\n"
 make_symlink "$TARGET/.claude/skills"          "../docs/agent-rules/skills"
 make_symlink "$TARGET/.opencode/commands"      "../docs/agent-rules/skills"
+make_symlink "$TARGET/.pi/skills"              "../docs/agent-rules/skills"
+
+# Pi settings (only if not present; never overwrites a user's tuning)
+if [[ -f "$TEMPLATES/.pi/settings.json" ]]; then
+    copy_file "$TEMPLATES/.pi/settings.json" "$TARGET/.pi/settings.json"
+fi
 
 # ── Post-install instructions ─────────────────────────────────────────────────
 printf "\n${GREEN}Done.${NC}\n\n"
@@ -153,6 +187,14 @@ Next steps:
 
   5. Write your first progress file:
        → Use /write-progress or follow docs/agent-rules/skills/write-progress/SKILL.md
+
+  6. (Optional) Try the Archon master-loop on one small epic:
+       → scripts/aw-run --dry-run <EPIC-ID>             # render only
+       → scripts/aw-run <EPIC-ID>                       # run for real
+     Defaults: master=claude:sonnet, coder=codex:gpt-5-codex,
+               tester=claude:sonnet, max-fix=3, max-arb=3,
+               autocommit ON, worktree cleanup ON.
+     Requires `archon` v0.3.10+ in PATH (https://github.com/coleam00/Archon).
 EOF
 
 # ── Cleanup temp clone (curl-pipe mode) ──────────────────────────────────────
