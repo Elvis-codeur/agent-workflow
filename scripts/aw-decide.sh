@@ -26,7 +26,12 @@ COMMIT_STATUS="${4:-}"
 ARB_JSON="${5:-}"
 HUMAN_OUT="${6:-}"
 
-ROOT="$(git rev-parse --show-toplevel)"
+# Use --git-common-dir instead of --show-toplevel.
+# In a git worktree, --show-toplevel returns the WORKTREE path; aw-run
+# (running in the main repo) would then read a different directory and
+# never find the marker file → state=UNKNOWN forever.
+# --git-common-dir returns the main repo's .git dir from any worktree.
+ROOT="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
 STATE_DIR="$ROOT/.archon/state"
 mkdir -p "$STATE_DIR"
 MARKER="$STATE_DIR/iterate-decision-${EPIC//[^A-Za-z0-9]/_}"

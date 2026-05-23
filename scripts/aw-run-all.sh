@@ -151,33 +151,62 @@ find_worktree() {
   local epic_id="$1"
   local safe
   safe="$(echo "$epic_id" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
-  # git worktree list --porcelain: first field is the path, second is HEAD sha,
-  # third is branch ref.  Find the entry whose branch contains the epic slug.
-  git worktree list --porcelain \
-    | awk '/^worktree /{wt=$2} /^branch /{if($2 ~ SAFE){print wt}}' \
-      SAFE="$safe"
+  # Use python to parse --porcelain safely (handles spaces in paths).
+  git worktree list --porcelain | python3 -c "
+import sys
+wt = ''
+for line in sys.stdin:
+    line = line.rstrip('\n')
+    if line.startswith('worktree '):
+        wt = line[9:]  # everything after 'worktree '
+    elif line.startswith('branch ') and '$safe' in line.lower():
+        print(wt)
+        break
+"
 }
 
-# Merge a worktree branch to main, push, and clean up.
+# Find a completed epic branch by name pattern (worktree may be gone).
+find_branch() {
+  local epic_id="$1"
+  local safe
+  safe="$(echo "$epic_id" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
+  git branch --list "*${safe}*" | head -1 | tr -d ' *'
+}
+
+# Merge a completed branch to main (with or without a live worktree),
+# push, and clean up the branch + worktree.
 merge_and_cleanup() {
   local epic_id="$1"
-  local branch="$2"    # full git branch name (e.g. archon/task-archon-epic-be-31)
-  local wt_path="$3"   # absolute path to worktree
+  local branch="$2"    # full git branch name
+  local wt_path="$3"  # absolute path to worktree, or "" if already gone
 
   echo "  → merging $branch to main"
-  git checkout main
+  local cur_branch; cur_branch="$(git branch --show-current)"
+  [[ "$cur_branch" != "main" ]] && git checkout main
+
+  # Stash any uncommitted WIP so the merge isn't blocked
+  local stashed=0
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    git stash push -u -m "aw-run-all merge stash for $epic_id" --quiet 2>/dev/null
+    stashed=1
+  fi
+
   git merge --no-ff "$branch" \
     -m "feat: $epic_id — Archon master-loop convergence
 
 Automated merge by aw-run-all.sh." 2>&1 | tail -3
+
+  if [[ $stashed -eq 1 ]]; then
+    git stash pop --quiet 2>/dev/null || true
+  fi
 
   if [[ "$PUSH" -eq 1 ]]; then
     echo "  → pushing main"
     git push origin main 2>&1 | tail -2
   fi
 
-  echo "  → cleaning up worktree"
-  git worktree remove --force "$wt_path" 2>/dev/null || true
+  echo "  → cleaning up branch"
+  [[ -n "$wt_path" ]] && git worktree remove --force "$wt_path" 2>/dev/null || true
   git branch -D "$branch" 2>/dev/null || true
 }
 
@@ -217,14 +246,22 @@ run_epic() {
     return
   fi
 
-  # Locate the worktree that was just completed
+  # Locate the worktree that was just completed.
+  # Fallback: if the worktree is already gone (e.g. archon complete ran),
+  # look for the branch directly and merge it anyway.
   local wt_path branch
   wt_path="$(find_worktree "$epic_id")"
-  if [[ -z "$wt_path" ]]; then
-    echo "  ⚠ could not locate worktree for $epic_id — skipping merge"
-  else
+  if [[ -n "$wt_path" ]]; then
     branch="$(git -C "$wt_path" branch --show-current)"
     merge_and_cleanup "$epic_id" "$branch" "$wt_path"
+  else
+    branch="$(find_branch "$epic_id")"
+    if [[ -n "$branch" ]]; then
+      echo "  (worktree gone; merging branch $branch directly)"
+      merge_and_cleanup "$epic_id" "$branch" ""
+    else
+      echo "  ⚠ could not locate worktree or branch for $epic_id — skipping merge"
+    fi
   fi
 
   echo "  ✓ $epic_id DONE"
