@@ -501,9 +501,10 @@ class TestPiContract(RegressionTest):
         If this path changes, our extensions will silently stop loading."""
         ext_global = pathlib.Path.home() / ".pi" / "agent" / "extensions"
         ext_local = ROOT / ".pi" / "extensions"
+        ext_tmpl = ROOT / "templates" / ".pi" / "extensions"  # agent-workflow source repo
         self.assertTrue(
-            ext_local.exists() or ext_global.exists(),
-            f"No Pi extension directory found at {ext_local} or {ext_global} — "
+            ext_local.exists() or ext_global.exists() or ext_tmpl.exists(),
+            f"No Pi extension directory found at {ext_local}, {ext_tmpl}, or {ext_global} — "
             f"bash-normalize-exit.ts and rate-limit-notifier.ts will not load.",
         )
 

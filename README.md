@@ -36,6 +36,7 @@ Safe to re-run — never overwrites files you have already customised.
 ├── scripts/
 │   ├── check-invariants.sh             ← add your architectural checks here
 │   ├── aw-run                          ← master-loop launcher (Archon)
+│   ├── aw-configure.py                 ← phase-skip decision logic (configure node)
 │   ├── aw-run-all.sh                   ← topological orchestrator (all epics)
 │   ├── aw-run-tests.sh                 ← project-agnostic test dispatcher
 │   ├── aw-decide.sh                    ← loop decision: CONVERGED/ITERATE/FAILED
@@ -111,6 +112,14 @@ scripts/aw-run \
 - tester: `pi:github-copilot/gemini-3-flash-preview` — fastest model, sufficient for test writing
 - master: `pi:github-copilot/gpt-5.2` — strong reasoning, used only for arbitration
 
+**Phase-skip flags** (save tokens on repeat runs):
+```bash
+scripts/aw-run --tests-only FE-52    # skip implement; write + run tests
+scripts/aw-run --reuse-tests FE-02   # skip implement + write-tests; just run
+```
+Auto-detected: if an epic is already `review`/`complete`, `implement` is skipped
+without any flag. See `docs/archon-master-loop.md` for full details.
+
 Requires `archon` ≥ v0.3.10 in PATH.
 Full design: `docs/archon-master-loop.md`.
 
@@ -127,15 +136,17 @@ read-epic → implement → write-tests → run-tests ──(PASS)──► comm
 ```
 
 1. **read-epic** — parses the epic JSON from `progress.*.yaml`
-2. **implement** — coder runs gate commands, marks `review`; reads `CODEBASE-SUMMARY.md` at Step 0 to skip ~5 000 tokens of codebase exploration
-3. **write-tests** — tester writes test files independently (fresh context = no knowledge of how coder solved it)
-4. **run-tests** — project-specific bash runner (`scripts/aw-test-<scope>.sh`)
-5. **fix-blocked** — coder fixes failures, up to `--max-fix-attempts` rounds
-6. **arbitrate** — master classifies the coder/tester disagreement into one of 8 buckets, emits `coder_right` / `tester_right` / `unsure`
-7. **ask-human** — only fires on `unsure`; the one point where the workflow blocks on input
-8. **commit** — runs `/commit` skill; never pushes, never opens a PR
-9. **update-context** — regenerates `CODEBASE-SUMMARY.md` (zero AI tokens); appends one-line epic log entry
-10. **decide** — writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED`; `aw-run` reads this and either cleans up or loops
+2. **configure** — bash node reads epic status + checks test-file presence; emits JSON skip flags
+   (`skip_implement`, `skip_write_tests`, `mode`). No AI tokens.
+3. **implement** — coder runs gate commands, marks `review`; reads `CODEBASE-SUMMARY.md` at Step 0 to skip ~5 000 tokens of codebase exploration. *Skipped automatically* when epic is `review`/`complete`.
+4. **write-tests** — tester writes test files independently (fresh context). *Skipped automatically* if all test files already exist.
+5. **run-tests** — project-specific bash runner (`scripts/aw-test-<scope>.sh`)
+6. **fix-blocked** — coder fixes failures, up to `--max-fix-attempts` rounds
+7. **arbitrate** — master classifies the coder/tester disagreement into one of 8 buckets, emits `coder_right` / `tester_right` / `unsure`
+8. **ask-human** — only fires on `unsure`; the one point where the workflow blocks on input
+9. **commit** — runs `/commit` skill; never pushes, never opens a PR
+10. **update-context** — regenerates `CODEBASE-SUMMARY.md` (zero AI tokens); appends one-line epic log entry
+11. **decide** — writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED`; `aw-run` reads this and either cleans up or loops
 
 All five AI nodes have `idle_timeout: 120s` — a throttled model that stops responding is killed within 2 minutes.
 
@@ -191,6 +202,9 @@ Three gotchas are pre-loaded from building this workflow:
 | GOTCHA-001 | Pi `bash` tool reporting `grep` exit 1 as a tool failure |
 | GOTCHA-002 | Double-quoting `$node.output` in Archon bash: nodes breaking bash |
 | GOTCHA-003 | Archon worktree venv having no packages → 63 xfail instead of running |
+| GOTCHA-004 | Test runner exits 1 → `fix-blocked` skipped; tests never fixed |
+| GOTCHA-005 | `aw-decide.sh` writes marker to worktree → `state=UNKNOWN`, merges skipped |
+| GOTCHA-006 | pnpm install stdout before PASS → `== 'PASS'` never matches |
 
 ---
 
@@ -225,6 +239,7 @@ rather than relying on prose rules they may forget in long sessions.
 | `/aw-master-loop` | (called by `arbitrate` node) | Classifies coder/tester disagreement |
 | `/record-gotcha` | "record this bug" | Writes to `docs/gotchas/` + epic's `gotchas:` list |
 | `/commit` | (called by `commit` node) | lint → typecheck → test → stage → conventional commit |
+| `/update-docs` | "update docs" | keep README, design docs, gotchas, and regression tests in sync |
 
 ---
 
