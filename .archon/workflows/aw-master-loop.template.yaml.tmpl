@@ -50,29 +50,62 @@ nodes:
   # Single-shot: the /implement-epic skill instructs the agent to iterate
   # internally until the epic is review-ready or genuinely blocked. Macro-
   # level retries are handled by the outer aw-run recursion (see `decide`).
+  #
+  # Key steps are inlined here so the agent does NOT need to fetch SKILL.md
+  # (saves ~1 000 tokens per run). CODEBASE-SUMMARY.md is read instead of
+  # spending 5 000+ tokens on codebase exploration.
   - id: implement
     depends_on: [read-epic]
     provider: {{CODER_PROVIDER}}
     model: {{CODER_MODEL}}
     prompt: |
-      You are the coder-agent. Run the /implement-epic skill on epic
-      "$read-epic.output.epic_id". Implementation paths:
-      $read-epic.output.implementation_paths.
-      Iterate internally until the epic is marked `review` in the progress
-      file and all gates pass. Do not write tests.
-      Shell tip: append `|| true` to any grep/find/ls used for existence
-      checks — Pi treats exit 1 (no matches) as a tool failure.
+      You are the coder-agent for epic "$read-epic.output.epic_id".
+
+      ## Step 0 — read context first (do this before anything else)
+      Read in order — each takes one tool call:
+      1. CODEBASE-SUMMARY.md           ← module layout, gate commands, test index
+      2. docs/gotchas/INDEX.md          ← known bugs; skip gotchas whose scope doesn't overlap
+      3. progress.$read-epic.output.scope.yaml   ← confirm epic status + acceptance criteria
+
+      ## Your task
+      Implement `$read-epic.output.implementation_paths`.
+      Acceptance criteria (from the epic):
+      $read-epic.output.implementation_acceptance
+      Spec section: $read-epic.output.spec_section
+
+      ## Rules
+      - Implement ONLY the acceptance bullets. No extra features.
+      - Do NOT write test files.
+      - Run the gate commands listed in CODEBASE-SUMMARY.md before marking `review`.
+      - Mark the epic `status: review` in the progress YAML when all gates pass.
+      - Shell tip: append `|| true` to grep/find/ls existence checks.
+
+      Iterate until the epic is `review` or you are genuinely blocked.
 
   # ---------------------------------------------------------------- tester (write)
+  # Key steps inlined — saves the SKILL.md tool call (~1 000 tokens).
   - id: write-tests
     depends_on: [implement]
     provider: {{TESTER_PROVIDER}}
     model: {{TESTER_MODEL}}
     context: fresh
     prompt: |
-      You are the tester-agent in Mode A (write-tests). Run /test-and-progress
-      Mode A on epic "$read-epic.output.epic_id". Write the files at
-      $read-epic.output.tests_paths. Do NOT run tests. Do NOT update status.
+      You are the tester-agent for epic "$read-epic.output.epic_id" (Mode A).
+
+      ## Step 0 — read context first
+      1. CODEBASE-SUMMARY.md           ← test file locations, test runner commands
+      2. docs/gotchas/INDEX.md          ← known environment / toolchain bugs
+
+      ## Your task
+      Write the test files at: $read-epic.output.tests_paths
+      Acceptance criteria for the tests:
+      $read-epic.output.tests_acceptance
+
+      ## Rules
+      - Write tests that verify each acceptance bullet independently.
+      - Do NOT run the tests.
+      - Do NOT modify implementation files.
+      - Do NOT update the progress YAML status.
 
   # ---------------------------------------------------------------- tester (run)
   - id: run-tests
@@ -83,22 +116,24 @@ nodes:
     timeout: 600000
 
   # ---------------------------------------------------------------- coder fix (single-shot)
-  # The /fix-blocked skill tells the agent it has up to MAX_FIX_ATTEMPTS
-  # internal attempts. Cross-DAG iteration handled by aw-run recursion.
+  # Key steps inlined — saves the SKILL.md tool call.
   - id: fix-blocked
     depends_on: [run-tests]
     when: "$run-tests.output != 'PASS'"
     provider: {{CODER_PROVIDER}}
     model: {{CODER_MODEL}}
     prompt: |
-      You are the coder-agent. Run /fix-blocked on epic
-      "$read-epic.output.epic_id". The tester reported:
+      You are the coder-agent. Epic "$read-epic.output.epic_id" has failing tests.
 
+      ## Test failure output
       $run-tests.output
 
-      You have up to {{MAX_FIX_ATTEMPTS}} internal attempts. Fix ONLY
-      implementation files. Stop when gates pass and the epic is `review`,
-      OR when you've exhausted attempts (mark the epic `blocked` with notes).
+      ## Your task
+      Fix ONLY implementation files at: $read-epic.output.implementation_paths
+      You have up to {{MAX_FIX_ATTEMPTS}} attempts.
+      After each fix, the test runner re-runs automatically.
+      Stop when the epic is `review` again, or mark it `blocked` with a note
+      if you exhaust your attempts.
       Shell tip: append `|| true` to grep/find/ls existence checks.
 
   - id: rerun-tests
@@ -166,12 +201,61 @@ nodes:
       Run the /commit skill. Do NOT push. Do NOT open a PR.
   # <<< AUTOCOMMIT
 
-  # ---------------------------------------------------------------- decide (loop driver)
+  # ---------------------------------------------------------------- update-context
+  # Runs after a successful commit. Regenerates CODEBASE-SUMMARY.md's
+  # AUTO-GENERATED section (zero AI tokens — pure bash/Python) and appends
+  # a one-line entry to the "Recent epic changes" section so the next agent
+  # starts with up-to-date context.
+  # >>> AUTOCOMMIT (stripped by scripts/aw-run when --no-autocommit)
+  - id: update-context
+    depends_on: [commit]
+    trigger_rule: one_success
+    bash: |
+      set -euo pipefail
+      ROOT="$(git rev-parse --show-toplevel)"
+      SUMMARY="$ROOT/CODEBASE-SUMMARY.md"
+
+      # 1. Regenerate the AUTO-GENERATED section
+      bash scripts/update-codebase-summary.sh
+
+      # 2. Append an epic log entry to the AGENT-MAINTAINED section
+      EPIC=$read-epic.output.epic_id
+      SCOPE=$read-epic.output.scope
+      TODAY="$(date -u +%Y-%m-%d)"
+      PATHS=$read-epic.output.implementation_paths
+      ENTRY="- ${EPIC} (${TODAY}): implemented ${PATHS} [scope: ${SCOPE}]"
+
+      python3 - "$SUMMARY" "$ENTRY" <<'PY'
+      import sys, pathlib, re
+      f, entry = pathlib.Path(sys.argv[1]), sys.argv[2]
+      txt = f.read_text()
+      # Replace the placeholder line if this is the first entry
+      txt = txt.replace(
+          "*(no epics completed yet)*",
+          entry
+      )
+      # Or append after the last entry in the section if entries exist
+      if "*(no epics completed yet)*" not in txt and entry not in txt:
+          txt = re.sub(
+              r"(<!-- AGENT-MAINTAINED:END -->)",
+              entry + "\n\n" + r"\1",
+              txt
+          )
+      f.write_text(txt)
+      PY
+
+      # 3. Stage and amend the autocommit with the updated summary
+      git add "$SUMMARY"
+      git commit --amend --no-edit --no-verify 2>/dev/null || true
+    timeout: 60000
+  # <<< AUTOCOMMIT
+
+
   # Final node. Reads upstream outcomes and writes a one-word state to
   # .archon/state/iterate-decision-<epic> so scripts/aw-run can decide whether
   # to recurse, cleanup, or hard-fail. Always runs (trigger_rule: all_done).
   - id: decide
-    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, commit]
+    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, commit, update-context]
     trigger_rule: all_done
     bash: |
       # Do NOT double-quote these: Archon already single-quotes each substituted
