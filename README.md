@@ -1,170 +1,241 @@
 # agent-workflow
 
-Boilerplate for multi-agent software projects.
-
-Provides:
-
-- **AGENTS.md** — cross-tool agent guide (Claude Code, Codex, OpenCode, Pi, ChatGPT)
-- **Pre-commit hooks** — conventional commits, file hygiene, gotchas-index regen, language linters
-- **CI skeleton** — GitHub Actions jobs with pluggable language tracks
-- **Architectural-invariant framework** — `check-invariants.sh` with a `check()` helper
-- **Skills** — on-demand procedural workflows for agents:
-  - `/write-progress` — author or extend a `progress.*.yaml` epic plan
-  - `/implement-epic` — coder-agent: implement an epic, run gates, mark review
-  - `/test-and-progress` — tester-agent: write tests (Mode A) or run + report (Mode B)
-  - `/fix-blocked` — coder-agent: fix a blocked epic from tester feedback
-  - `/aw-master-loop` — master-agent: arbitrate coder/tester ties, ask the human when unsure
-  - `/record-gotcha` — capture off-epic bugs (toolchain, env, codegen) for future agents
-  - `/commit` — gate-checked commit: lint → typecheck → test → stage → commit
-- **Archon master loop** — `scripts/aw-run <EPIC-ID>` runs the full
-  coder/tester ping-pong end-to-end via [Archon](https://github.com/coleam00/Archon),
-  picking which model plays each role and arbitrating disagreements
-  automatically. See `docs/archon-master-loop.md`.
-- **Gotchas registry** — `docs/gotchas/` + auto-generated `INDEX.md` so
-  the bug one agent discovers doesn't burn another agent's tokens.
-- **Symlinks** — `.claude/skills/`, `.opencode/commands/`, and `.pi/skills/`
-  all point to the skill tree.
+Boilerplate for multi-agent software projects — installs the infrastructure
+to run a fully automated coder ↔ tester loop via
+[Archon](https://github.com/coleam00/Archon), with observability, rate-limit
+detection, context efficiency, and regression tests to survive upstream upgrades.
 
 ---
 
 ## Install into a project
 
 ```bash
-# Recommended — clone and run (always works, no CDN caching issues):
+# Clone and run (recommended — avoids CDN caching):
 git clone --depth=1 https://github.com/Elvis-codeur/agent-workflow.git /tmp/aw
-bash /tmp/aw/install.sh /path/to/myproject   # or . for current directory
+bash /tmp/aw/install.sh /path/to/myproject
 rm -rf /tmp/aw
 
-# Convenience one-liner (may serve a cached script for a few minutes after updates):
-curl -fsSL https://raw.githubusercontent.com/Elvis-codeur/agent-workflow/main/install.sh | bash -s -- /path/to/myproject
+# One-liner:
+curl -fsSL https://raw.githubusercontent.com/Elvis-codeur/agent-workflow/main/install.sh \
+  | bash -s -- /path/to/myproject
 ```
 
-The script is safe to re-run — it will not overwrite files you have already customised unless you pass `--force`.
+Safe to re-run — never overwrites files you have already customised.
 
 ---
 
 ## What gets installed
 
 ```
-<your-project>/
-├── AGENTS.md                          ← fill in your invariants + layout
-├── CLAUDE.md                          ← thin Claude Code pointer (do not edit)
-├── .pre-commit-config.yaml            ← uncomment the language tracks you use
-├── .github/workflows/ci.yml           ← uncomment the CI jobs you need
+<project>/
+├── AGENTS.md                           ← fill in your invariants + layout
+├── CODEBASE-SUMMARY.md                 ← pre-digested facts for agents (~600 tokens)
+├── CLAUDE.md                           ← thin Claude Code pointer (do not edit)
+├── .pre-commit-config.yaml             ← uncomment the language tracks you use
+├── .github/workflows/ci.yml            ← uncomment the CI jobs you need
 ├── scripts/
-│   ├── check-invariants.sh            ← add your architectural checks here
-│   ├── aw-run                         ← master-loop launcher (Archon)
-│   ├── aw-run-tests.sh                ← project-agnostic test node
-│   ├── aw-decide.sh                   ← loop-driver decision logic
-│   └── gotchas-index.sh               ← regenerates docs/gotchas/INDEX.md
+│   ├── check-invariants.sh             ← add your architectural checks here
+│   ├── aw-run                          ← master-loop launcher (Archon)
+│   ├── aw-run-all.sh                   ← topological orchestrator (all epics)
+│   ├── aw-run-tests.sh                 ← project-agnostic test dispatcher
+│   ├── aw-decide.sh                    ← loop decision: CONVERGED/ITERATE/FAILED
+│   ├── aw-inspect                      ← observability CLI
+│   ├── aw-regression-test              ← 45 integration regression tests
+│   ├── update-codebase-summary.sh      ← regenerates CODEBASE-SUMMARY.md
+│   └── gotchas-index.sh                ← regenerates docs/gotchas/INDEX.md
 ├── .archon/workflows/
-│   └── aw-master-loop.template.yaml.tmpl   ← rendered per-run by aw-run
+│   └── aw-master-loop.template.yaml.tmpl   ← 11-node DAG, rendered per-run
+├── .pi/
+│   ├── extensions/
+│   │   ├── bash-normalize-exit.ts      ← fixes grep exit 1 false alarms
+│   │   └── rate-limit-notifier.ts      ← surfaces API throttling in real-time
+│   └── settings.json                   ← Pi skill path configuration
 ├── docs/
-│   ├── gotchas/
-│   │   ├── INDEX.md                   ← auto-generated; read at Step 0
-│   │   └── _TEMPLATE.md
-│   └── agent-rules/
-│       ├── skills/
-│       │   ├── write-progress/SKILL.md
-│       │   ├── implement-epic/SKILL.md
-│       │   ├── test-and-progress/SKILL.md
-│       │   ├── fix-blocked/SKILL.md
-│       │   ├── aw-master-loop/SKILL.md
-│       │   ├── record-gotcha/SKILL.md
-│       │   └── commit/SKILL.md
-│       └── orientation.md                 ← fill in your project-specific nav
-.claude/skills      -> docs/agent-rules/skills   (symlink)
-.opencode/commands  -> docs/agent-rules/skills   (symlink)
-.pi/skills          -> docs/agent-rules/skills   (symlink)
-.pi/settings.json                                 ← makes pi load the same tree
+│   ├── archon-master-loop.md           ← DAG design + operations guide
+│   ├── observability.md                ← watching what agents did
+│   ├── regression-testing.md           ← preventing upstream breakage
+│   └── gotchas/
+│       ├── INDEX.md                    ← auto-generated; agents read at Step 0
+│       └── _TEMPLATE.md
+└── docs/agent-rules/
+    └── skills/
+        ├── write-progress/SKILL.md
+        ├── implement-epic/SKILL.md
+        ├── test-and-progress/SKILL.md
+        ├── fix-blocked/SKILL.md
+        ├── aw-master-loop/SKILL.md
+        ├── record-gotcha/SKILL.md
+        └── commit/SKILL.md
+.claude/skills      → docs/agent-rules/skills  (symlink)
+.opencode/commands  → docs/agent-rules/skills  (symlink)
+.pi/skills          → docs/agent-rules/skills  (symlink)
 ```
 
 ---
 
-## After install — three things to customise
+## After install — four things to customise
 
 1. **`AGENTS.md`** — add your project layout and architectural invariants.
 2. **`scripts/check-invariants.sh`** — add `check` calls for your project rules.
 3. **`.pre-commit-config.yaml` and `ci.yml`** — uncomment the language tracks you use.
-
-Everything else works out of the box.
-
----
-
-## The two-agent-track model
-
-Every epic in a `progress.*.yaml` file has two independent tracks:
-
-- **coder-agent** — implements `implementation.paths`, runs gates, marks `review`
-- **tester-agent** — writes `tests.paths`, runs them, marks `complete` or `blocked`
-
-The separation gives you an independent test signal: the tester never fixes code,
-and the coder never writes the tests that verify their own work.
-
-Skills encode the exact procedure for each role. Agents load a skill on demand
-rather than relying on prose rules they may forget in long sessions.
+4. **`scripts/aw-test-<scope>.sh`** — add project-specific test runners
+   (e.g. `aw-test-backend.sh`, `aw-test-frontend.sh`) so the workflow runs
+   the right tests for each epic scope.
 
 ---
 
-## Running an epic end-to-end — the Archon master loop
-
-`scripts/aw-run <EPIC-ID>` drives the full coder/tester ping-pong without a
-human in the loop:
+## Running an epic end-to-end
 
 ```bash
-scripts/aw-run EPIC-AUTH-001
-# defaults: master=pi:github-copilot/claude-sonnet-4.6, coder=pi:github-copilot/claude-sonnet-4.6,
-#           tester=pi:github-copilot/claude-sonnet-4.6, max-fix=3, max-arb=3,
-#           autocommit ON, worktree cleanup ON.
+# One epic
+scripts/aw-run BE-31
 
-scripts/aw-run --coder pi:kiro/minimax-m2-5 \
-               --tester pi:github-copilot/claude-sonnet-4.6 \
-               --master claude:opus \
-               --max-fix-attempts 5 \
-               --no-autocommit \
-               EPIC-AUTH-001
+# All open epics in dependency order
+scripts/aw-run-all.sh
+
+# Dry-run: see the 6-layer plan without running anything
+scripts/aw-run-all.sh --dry-run
+
+# Resume after a stop
+scripts/aw-run-all.sh --from BE-37
+
+# Override models per-run
+scripts/aw-run \
+  --coder  pi:github-copilot/gpt-5.3-codex \
+  --tester pi:github-copilot/gemini-3-flash-preview \
+  BE-31
 ```
 
-Under the hood:
+**Defaults** (chosen for throughput, not just capability):
+- coder: `pi:github-copilot/gpt-5.3-codex` — code-optimised, 400K context
+- tester: `pi:github-copilot/gemini-3-flash-preview` — fastest model, sufficient for test writing
+- master: `pi:github-copilot/gpt-5.2` — strong reasoning, used only for arbitration
 
-1. The wrapper renders `.archon/workflows/aw-master-loop.template.yaml.tmpl` with
-   the chosen per-role provider/model triples.
-2. [Archon](https://github.com/coleam00/Archon) creates an isolated git
-   worktree and runs the DAG: `read-epic → implement (loop) → write-tests →
-   run-tests → (on fail) fix-blocked (loop) → arbitrate → (unsure) ask-human
-   → commit → decide`.
-3. The `decide` node writes a one-word state (`CONVERGED` / `EXHAUSTED` /
-   `ITERATE` / `FAILED`) that the wrapper reads to decide whether to recurse,
-   clean up the worktree, or hard-fail with `BLOCKED-ARBITRATION-EXHAUSTED`.
-4. Each AI node can be assigned to **pi**, **claude**, or **codex** — mix
-   and match per role. Default for all three roles: `pi:github-copilot/claude-sonnet-4.6`.
-
-Requires `archon` v0.3.10+ in `PATH`. See `docs/archon-master-loop.md` for
-the full design and `skills/aw-master-loop/SKILL.md` for the arbitration
-procedure.
+Requires `archon` ≥ v0.3.10 in PATH.
+Full design: `docs/archon-master-loop.md`.
 
 ---
 
-## Gotchas — institutional memory for off-epic bugs
+## What happens inside one epic run
 
-Agents working on one epic frequently hit bugs that are NOT part of that
-epic's acceptance criteria — a toolchain quirk, a cross-filesystem hazard,
-a codegen oddity. Losing this knowledge is expensive: the next agent
-rediscovers it from zero.
+```
+read-epic → implement → write-tests → run-tests ──(PASS)──► commit → update-context → decide
+                                           │
+                                           └──(FAIL)──► fix-blocked → rerun-tests
+                                                                           │
+                                                              (still FAIL) └──► arbitrate → ask-human
+```
 
-The `/record-gotcha` skill writes these findings to `docs/gotchas/` (with a
-full reproduction recipe when needed) and adds a 5-line summary to the
-epic's `gotchas:` list. `scripts/gotchas-index.sh` (run by the pre-commit
-hook) keeps `docs/gotchas/INDEX.md` in sync. Every skill's Step 0 reads
-the index before starting work.
+1. **read-epic** — parses the epic JSON from `progress.*.yaml`
+2. **implement** — coder runs gate commands, marks `review`; reads `CODEBASE-SUMMARY.md` at Step 0 to skip ~5 000 tokens of codebase exploration
+3. **write-tests** — tester writes test files independently (fresh context = no knowledge of how coder solved it)
+4. **run-tests** — project-specific bash runner (`scripts/aw-test-<scope>.sh`)
+5. **fix-blocked** — coder fixes failures, up to `--max-fix-attempts` rounds
+6. **arbitrate** — master classifies the coder/tester disagreement into one of 8 buckets, emits `coder_right` / `tester_right` / `unsure`
+7. **ask-human** — only fires on `unsure`; the one point where the workflow blocks on input
+8. **commit** — runs `/commit` skill; never pushes, never opens a PR
+9. **update-context** — regenerates `CODEBASE-SUMMARY.md` (zero AI tokens); appends one-line epic log entry
+10. **decide** — writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED`; `aw-run` reads this and either cleans up or loops
+
+All five AI nodes have `idle_timeout: 120s` — a throttled model that stops responding is killed within 2 minutes.
 
 ---
 
-## Adding project-specific skills
+## Observability
 
-Add a directory under `docs/agent-rules/skills/<name>/SKILL.md`.
-Register it in `AGENTS.md` skills table and in `docs/agent-rules/orientation.md`.
-The symlinks pick it up automatically.
+```bash
+archon serve                                          # web UI at localhost:3090
+scripts/aw-inspect BE-31                              # cost + duration per node
+scripts/aw-inspect BE-31 --events | less              # every file read, every bash command
+scripts/aw-inspect BE-31 --session                    # path to Pi session JSONL
+pi --resume "$(scripts/aw-inspect BE-31 --session)"  # replay + ask follow-ups
+```
+
+Full guide: `docs/observability.md`.
+
+---
+
+## Rate limit detection
+
+When GitHub Copilot (or any provider) throttles a session, you now see:
+
+```
+============================================================
+  ⛔  RATE LIMIT DETECTED IN THIS RUN
+============================================================
+  Limit type : 5-hour rolling window
+  Reason     : out_of_credits
+  Resets at  : 2026-05-23 15:10:00 (in 37 min)
+
+  💡 Switch model: scripts/aw-run --coder pi:github-copilot/gpt-5.3-codex EPIC
+============================================================
+```
+
+This is printed by `scripts/aw-run` after any failed run. The
+`rate-limit-notifier.ts` Pi extension also shows it in real-time in the TUI
+during a session.
+
+---
+
+## Gotchas registry — institutional memory
+
+When an agent hits a bug that isn't part of the epic's acceptance criteria
+(toolchain quirk, env hazard, codegen oddity), the `/record-gotcha` skill
+writes it to `docs/gotchas/`. `scripts/gotchas-index.sh` keeps `INDEX.md`
+in sync. Every agent reads the index at Step 0 so the bug isn't rediscovered.
+
+Three gotchas are pre-loaded from building this workflow:
+
+| ID | What it prevents |
+|---|---|
+| GOTCHA-001 | Pi `bash` tool reporting `grep` exit 1 as a tool failure |
+| GOTCHA-002 | Double-quoting `$node.output` in Archon bash: nodes breaking bash |
+| GOTCHA-003 | Archon worktree venv having no packages → 63 xfail instead of running |
+
+---
+
+## Regression tests — surviving Archon and Pi upgrades
+
+```bash
+# Before upgrading Archon or Pi, run this first:
+python3 scripts/aw-regression-test
+
+# Filter by area:
+python3 scripts/aw-regression-test archon    # DB schema + CLI flags + YAML
+python3 scripts/aw-regression-test pi        # tools + extensions + model format
+python3 scripts/aw-regression-test scripts   # our own scripts
+```
+
+45 tests across 5 suites. Each failure names the affected script and gives
+a concrete fix. Full guide: `docs/regression-testing.md`.
+
+---
+
+## Skills
+
+On-demand procedural workflows — agents load them by reading `SKILL.md`
+rather than relying on prose rules they may forget in long sessions.
+
+| Skill | Trigger | What it does |
+|---|---|---|
+| `/write-progress` | "plan epic X" | Authors or extends a `progress.*.yaml` |
+| `/implement-epic` | (called by `implement` node) | Implements an epic end-to-end; marks `review` |
+| `/test-and-progress` | (called by `write-tests` node) | Mode A: writes tests; Mode B: runs + reports |
+| `/fix-blocked` | (called by `fix-blocked` node) | Fixes failing tests, stays in scope |
+| `/aw-master-loop` | (called by `arbitrate` node) | Classifies coder/tester disagreement |
+| `/record-gotcha` | "record this bug" | Writes to `docs/gotchas/` + epic's `gotchas:` list |
+| `/commit` | (called by `commit` node) | lint → typecheck → test → stage → conventional commit |
+
+---
+
+## Cross-tool skill coverage
+
+| Tool | Auto-loads skills? | How |
+|---|---|---|
+| Claude Code | ✅ | `.claude/skills/` symlink |
+| Pi | ✅ | `.pi/skills/` symlink + `.pi/settings.json` |
+| OpenCode | ⚠️ read-on-demand | `.opencode/commands/` symlink; agent reads via AGENTS.md pointer |
+| Codex | ⚠️ read-on-demand | No skill mechanism; agent reads via AGENTS.md pointer |
 
 ---
 
