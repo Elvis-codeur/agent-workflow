@@ -41,7 +41,7 @@ read-epic
   └─► configure ────────────────────────────────────────────────────────────┐
         └─► implement ─(if skip_implement=false)──────────────────────────  │
               └─► write-tests ─(if skip_write_tests=false)─────────────── │ │
-                    └─► run-tests ──(PASS)──► commit ──► update-context ──► decide
+                    └─► run-tests ──(PASS)──► ci-check ──► promote-complete ──► commit ──► update-context ──► decide
                           │
                           └──(FAIL)──► fix-blocked ──► rerun-tests
                                                            │
@@ -59,6 +59,7 @@ read-epic
 | `rerun-tests` | bash | same as run-tests, after fix-blocked |
 | `arbitrate` | AI (master) | classifies disagreement into one of 8 buckets, emits verdict JSON |
 | `ask-human` | AI (master) | prompts the user when arbitrate returns `unsure` |
+| `promote-complete` | bash | marks epic `status: complete` in `progress.<scope>.yaml` after tests+CI pass |
 | `commit` | AI (master) | runs `/commit` skill — never pushes, never opens a PR |
 | `update-context` | bash | regenerates `CODEBASE-SUMMARY.md`; appends epic log line |
 | `decide` | bash | writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED` to `.archon/state/` |

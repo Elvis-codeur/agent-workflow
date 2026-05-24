@@ -128,7 +128,7 @@ Full design: `docs/archon-master-loop.md`.
 ## What happens inside one epic run
 
 ```
-read-epic → implement → write-tests → run-tests ──(PASS)──► commit → update-context → decide
+read-epic → implement → write-tests → run-tests ──(PASS)──► ci-check → promote-complete → commit → update-context → decide
                                            │
                                            └──(FAIL)──► fix-blocked → rerun-tests
                                                                            │
@@ -144,8 +144,9 @@ read-epic → implement → write-tests → run-tests ──(PASS)──► comm
 6. **fix-blocked** — coder fixes failures, up to `--max-fix-attempts` rounds
 7. **arbitrate** — master classifies the coder/tester disagreement into one of 8 buckets, emits `coder_right` / `tester_right` / `unsure`
 8. **ask-human** — only fires on `unsure`; the one point where the workflow blocks on input
-9. **commit** — runs `/commit` skill; never pushes, never opens a PR
-10. **update-context** — regenerates `CODEBASE-SUMMARY.md` (zero AI tokens); appends one-line epic log entry
+9. **promote-complete** — when tests + CI pass, updates `progress.<scope>.yaml` to `status: complete`
+10. **commit** — runs `/commit` skill; never pushes, never opens a PR
+11. **update-context** — regenerates `CODEBASE-SUMMARY.md` (zero AI tokens); appends one-line epic log entry
 11. **decide** — writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED`; `aw-run` reads this and either cleans up or loops
 
 All five AI nodes have `idle_timeout: 120s` — a throttled model that stops responding is killed within 2 minutes.

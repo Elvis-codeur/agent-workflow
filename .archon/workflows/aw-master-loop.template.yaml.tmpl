@@ -297,12 +297,55 @@ nodes:
         $read-epic.output.scope
     timeout: 300000
 
-  # ---------------------------------------------------------------- commit
+  # ---------------------------------------------------------------- promote-complete
+  # When tests + CI pass, promote epic status to complete before committing.
   # >>> AUTOCOMMIT (stripped by scripts/aw-run when --no-autocommit)
-  - id: commit
+  - id: promote-complete
     depends_on: [ci-check, rerun-ci]
     trigger_rule: one_success
     when: "$ci-check.output == 'PASS' || $rerun-ci.output == 'PASS'"
+    bash: |
+      set -euo pipefail
+      ROOT="$(git rev-parse --show-toplevel)"
+      EPIC=$read-epic.output.epic_id
+      SCOPE=$read-epic.output.scope
+      FILE="$ROOT/progress.${SCOPE}.yaml"
+
+      python3 - "$FILE" "$EPIC" <<'PY'
+      import pathlib
+      import sys
+      import yaml
+
+      path = pathlib.Path(sys.argv[1])
+      epic_id = sys.argv[2]
+      data = yaml.safe_load(path.read_text())
+      if not isinstance(data, dict):
+          raise SystemExit(f"invalid YAML root in {path}")
+
+      key = next((k for k in data if k == "epics" or "epics" in k), None)
+      if key is None or not isinstance(data.get(key), list):
+          raise SystemExit(f"could not find epics list in {path}")
+
+      found = False
+      for ep in data[key]:
+          if isinstance(ep, dict) and ep.get("id") == epic_id:
+              ep["status"] = "complete"
+              found = True
+              break
+
+      if not found:
+          raise SystemExit(f"epic {epic_id} not found in {path}")
+
+      path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+      print(f"status complete: {epic_id} ({path.name})")
+      PY
+
+      git add "$FILE"
+    timeout: 60000
+
+  # ---------------------------------------------------------------- commit
+  - id: commit
+    depends_on: [promote-complete]
     idle_timeout: 120000
     prompt: |
       Run the /commit skill. Do NOT push. Do NOT open a PR.
@@ -362,7 +405,7 @@ nodes:
   # .archon/state/iterate-decision-<epic> so scripts/aw-run can decide whether
   # to recurse, cleanup, or hard-fail. Always runs (trigger_rule: all_done).
   - id: decide
-    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, commit, update-context, configure, ci-check, rerun-ci]
+    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, promote-complete, commit, update-context, configure, ci-check, rerun-ci]
     trigger_rule: all_done
     bash: |
       # Do NOT double-quote these: Archon already single-quotes each substituted
