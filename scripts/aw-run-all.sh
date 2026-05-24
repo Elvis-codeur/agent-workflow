@@ -194,7 +194,7 @@ merge_and_cleanup() {
   fi
 
   git merge --no-ff "$branch" \
-    -m "feat: $epic_id — Archon master-loop convergence
+    -m "chore(workflow): merge $epic_id via aw-run-all
 
 Automated merge by aw-run-all.sh." 2>&1 | tail -3
 

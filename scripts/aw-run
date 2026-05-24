@@ -346,7 +346,7 @@ merge_epic_into_main() {
     fi
 
     echo "auto-merge: merging $branch -> main"
-    if ! git merge --no-ff "$branch" -m "merge: $EPIC — aw-run --merge-on-success"; then
+    if ! git merge --no-ff "$branch" -m "chore(workflow): merge $EPIC via aw-run --merge-on-success"; then
         [[ $stashed -eq 1 ]] && git stash pop --quiet 2>/dev/null || true
         return 1
     fi
