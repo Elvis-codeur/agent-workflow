@@ -150,7 +150,7 @@ fi
 find_worktree() {
   local epic_id="$1"
   local safe
-  safe="$(echo "$epic_id" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
+  safe="$(printf '%s' "$epic_id" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
   # Use python to parse --porcelain safely (handles spaces in paths).
   git worktree list --porcelain | python3 -c "
 import sys
@@ -169,7 +169,7 @@ for line in sys.stdin:
 find_branch() {
   local epic_id="$1"
   local safe
-  safe="$(echo "$epic_id" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
+  safe="$(printf '%s' "$epic_id" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
   # --format strips the leading `+ ` / `* ` worktree/HEAD markers that
   # `tr -d ' *'` would miss (the `+` for linked-worktree branches).
   git branch --list --format='%(refname:short)' "*${safe}*" | head -1
