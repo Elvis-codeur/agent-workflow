@@ -413,9 +413,7 @@ nodes:
       # the JSON prematurely closes the outer double-quote and breaks bash.
       bash scripts/aw-decide.sh \
         $read-epic.output.epic_id \
-        $run-tests.output \
-        $rerun-tests.output \
-        done \
+        $commit.output \
         $arbitrate.output \
         $ask-human.output
     timeout: 30000

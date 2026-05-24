@@ -12,11 +12,13 @@
 #
 # Args (positional, all strings, may be empty):
 #   $1 epic id
-#   $2 run-tests output    (PASS or test failure text)
-#   $3 rerun-tests output  (PASS or test failure text; "" if not run)
-#   $4 commit node status  (the bash node printed nothing; we infer from $5)
-#   $5 arbitrate JSON      (the structured-output JSON; "" if not run)
-#   $6 ask-human output    (the human's final word; "" if not run)
+#   $2 commit node output  (non-empty when commit ran)
+#   $3 arbitrate JSON      (the structured-output JSON; "" if not run)
+#   $4 ask-human output    (the human's final word; "" if not run)
+#
+# NOTE: We intentionally do NOT pass run-tests/rerun-tests outputs here.
+# Those can be very large (vitest/pytest logs) and may exceed OS argv limits
+# for the final decide bash node (E2BIG).
 set -euo pipefail
 
 # When read-epic upstream returns empty JSON (model rate-limited / silent
@@ -29,11 +31,9 @@ if [[ -z "$EPIC" ]]; then
   echo "FAILED"
   exit 1
 fi
-RUN_OUT="${2:-}"
-RERUN_OUT="${3:-}"
-COMMIT_STATUS="${4:-}"
-ARB_JSON="${5:-}"
-HUMAN_OUT="${6:-}"
+COMMIT_OUT="${2:-}"
+ARB_JSON="${3:-}"
+HUMAN_OUT="${4:-}"
 
 # Use --git-common-dir instead of --show-toplevel.
 # In a git worktree, --show-toplevel returns the WORKTREE path; aw-run
@@ -46,9 +46,9 @@ mkdir -p "$STATE_DIR"
 MARKER="$STATE_DIR/iterate-decision-${EPIC//[^A-Za-z0-9]/_}"
 
 decide() {
-    # Green path: a test phase passed AND we didn't fall into arbitration.
-    if [[ -z "$ARB_JSON" ]] && \
-       { [[ "$RUN_OUT" == *PASS* ]] || [[ "$RERUN_OUT" == *PASS* ]]; }; then
+    # Green path: commit ran successfully (which only happens after
+    # tests + ci-check pass) and no arbitration was needed.
+    if [[ -z "$ARB_JSON" ]] && [[ -n "$COMMIT_OUT" ]]; then
         echo CONVERGED; return
     fi
 
