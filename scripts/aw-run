@@ -16,6 +16,7 @@
 #   --from-branch BRANCH                (default: repo default branch / main)
 #   --no-autocommit                     skip the in-workflow commit node
 #   --keep-worktree                     do not run `archon complete` on success
+#   --merge-on-success                  merge epic branch into local main on success
 #   --dry-run                           render YAML and print path; do not run
 #
 # Phase-skip flags (save tokens when a phase was already done):
@@ -63,6 +64,7 @@ BRANCH=""
 DRY=0
 AUTOCOMMIT=1
 CLEAN_WORKTREE=1
+MERGE_ON_SUCCESS=0
 
 usage() { sed -n '2,28p' "$0"; }
 
@@ -82,6 +84,7 @@ while [[ $# -gt 0 ]]; do
         --reuse-tests)         SKIP_IMPLEMENT=true; SKIP_WRITE_TESTS=true; shift ;; # run existing tests
         --no-autocommit)       AUTOCOMMIT=0; shift ;;
         --keep-worktree)       CLEAN_WORKTREE=0; shift ;;
+        --merge-on-success)    MERGE_ON_SUCCESS=1; shift ;;
         --dry-run)             DRY=1; shift ;;
         -h|--help)             usage; exit 0 ;;
         --) shift; break ;;
@@ -149,6 +152,7 @@ echo "  max-fix     = $MAX_FIX"
 echo "  max-arb     = $MAX_ARB"
 echo "  autocommit  = $AUTOCOMMIT"
 echo "  cleanup     = $CLEAN_WORKTREE"
+echo "  auto-merge  = $MERGE_ON_SUCCESS"
 [[ "$SKIP_IMPLEMENT" == "true" ]]   && echo "  skip-impl   = yes (will be refined by configure node)"
 [[ "$SKIP_WRITE_TESTS" == "true" ]] && echo "  skip-tests  = yes (will be refined by configure node)"
 
@@ -295,8 +299,73 @@ print('=' * 60)
 PYEOF
 }
 
-if [[ "$RC" -eq 0 && "$CLEAN_WORKTREE" -eq 1 ]]; then
-    archon complete "$BRANCH" || echo "warning: 'archon complete' failed; clean up manually" >&2
+# ── Optional local merge on success ───────────────────────────────────────
+find_worktree_for_epic() {
+    local safe
+    safe="$(echo "$EPIC" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
+    git worktree list --porcelain | python3 -c "
+import sys
+wt=''
+for line in sys.stdin:
+    line=line.rstrip('\n')
+    if line.startswith('worktree '):
+        wt=line[9:]
+    elif line.startswith('branch ') and '$safe' in line.lower():
+        print(wt)
+        break
+"
+}
+
+find_branch_for_epic() {
+    local safe
+    safe="$(echo "$EPIC" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
+    git branch --list --format='%(refname:short)' "*${safe}*" | grep '^archon/' | head -1
+}
+
+merge_epic_into_main() {
+    local wt_path branch
+    wt_path="$(find_worktree_for_epic)"
+    if [[ -n "$wt_path" ]]; then
+        branch="$(git -C "$wt_path" branch --show-current)"
+    else
+        branch="$(find_branch_for_epic)"
+    fi
+
+    if [[ -z "$branch" ]]; then
+        echo "warning: could not locate epic branch for $EPIC; merge skipped" >&2
+        return 1
+    fi
+
+    local cur_branch stashed=0
+    cur_branch="$(git branch --show-current)"
+    [[ "$cur_branch" != "main" ]] && git checkout main >/dev/null
+
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        git stash push -u -m "aw-run merge stash for $EPIC" --quiet 2>/dev/null || true
+        stashed=1
+    fi
+
+    echo "auto-merge: merging $branch -> main"
+    if ! git merge --no-ff "$branch" -m "merge: $EPIC — aw-run --merge-on-success"; then
+        [[ $stashed -eq 1 ]] && git stash pop --quiet 2>/dev/null || true
+        return 1
+    fi
+
+    [[ $stashed -eq 1 ]] && git stash pop --quiet 2>/dev/null || true
+    return 0
+}
+
+if [[ "$RC" -eq 0 ]]; then
+    if [[ "$MERGE_ON_SUCCESS" -eq 1 ]]; then
+        if ! merge_epic_into_main; then
+            echo "workflow succeeded but auto-merge failed; resolve manually" >&2
+            RC=97
+        fi
+    fi
+
+    if [[ "$RC" -eq 0 && "$CLEAN_WORKTREE" -eq 1 ]]; then
+        archon complete "$BRANCH" || echo "warning: 'archon complete' failed; clean up manually" >&2
+    fi
 elif [[ "$RC" -eq 42 ]]; then
     echo "BLOCKED-ARBITRATION-EXHAUSTED after $ITER iteration(s) — worktree $BRANCH preserved for human review" >&2
 else
