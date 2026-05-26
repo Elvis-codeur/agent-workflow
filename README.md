@@ -149,6 +149,19 @@ scripts/aw-run \
 scripts/aw-run --tests-only FE-52    # skip implement; write + run tests
 scripts/aw-run --reuse-tests FE-02   # skip implement + write-tests; just run
 ```
+
+**Single-agent mode** (one session, no separate tester):
+```bash
+# CLI flag — overrides the epic's agent_mode field
+scripts/aw-run --single-agent BE-07
+
+# Or set per-epic in the progress YAML (auto-detected, no flag needed):
+# agent_mode: single
+```
+In single-agent mode the coder implements **and** writes tests in one session.
+The progress file is marked `[SINGLE-AGENT]` so the lack of independent tester
+review is explicit and auditable. The rest of the DAG (`run-tests`, `ci-check`,
+`promote-complete`, `commit`) is identical to split mode.
 Auto-detected: if an epic is already `review`/`complete`, `implement` is skipped
 without any flag. See `docs/archon-master-loop.md` for full details.
 

@@ -48,6 +48,9 @@ read-epic
                           └──(FAIL)──► fix-blocked ──► rerun-tests
                                                            │
                                             (FAIL) ──► arbitrate ──► ask-human
+
+  single-agent mode (agent_mode: single):
+    configure ──► implement-and-test ──► run-tests ──► (same path as above)
 ```
 
 | Node | Type | Role | What it does |
@@ -61,6 +64,7 @@ read-epic
 | `rerun-tests` | bash | same as run-tests, after fix-blocked |
 | `arbitrate` | AI (master) | classifies disagreement into one of 8 buckets, emits verdict JSON |
 | `ask-human` | AI (master) | prompts the user when arbitrate returns `unsure` |
+| `implement-and-test` | AI (coder, **single-agent mode only**) | implements + writes tests in one session; skips separate `implement` and `write-tests` |
 | `ci-check` | bash | runs `scripts/aw-ci-preflight.sh`: lint, typecheck, lockfiles, migrations |
 | `fix-ci` | AI (coder) | fixes CI-only failures (format drift, stale locks, missing migrations) |
 | `rerun-ci` | bash | re-runs CI gates after fix-ci |
@@ -69,7 +73,7 @@ read-epic
 | `update-context` | bash | regenerates `CODEBASE-SUMMARY.md`; appends epic log line |
 | `decide` | bash | writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED` to `.archon/state/` |
 
-`implement`, `write-tests`, `fix-blocked`, `arbitrate`, `fix-ci`, and `commit` all have
+`implement`, `write-tests`, `implement-and-test`, `fix-blocked`, `arbitrate`, `fix-ci`, and `commit` all have
 `idle_timeout: 120000` (2 minutes). If the model stops generating tokens for
 2 minutes, Archon kills the node and `decide` writes `FAILED` so `aw-run` can
 break the loop rather than hanging for hours.
@@ -110,6 +114,7 @@ cases:
 |---|---|
 | Epic `status == review` or `complete` | `implement` skipped |
 | `skip_implement` + all test files exist in worktree | `write-tests` also skipped |
+| `epic.agent_mode == 'single'` or `--single-agent` flag | `implement` + `write-tests` skipped; `implement-and-test` runs instead |
 
 **Manual overrides:**
 
@@ -140,6 +145,52 @@ The configure output is visible in the workflow log:
 configure: mode=reuse-tests  skip_impl=True  skip_tests=True
            status='complete'  tests_exist=True
 ```
+
+---
+
+## Single-agent mode — one session for implement + tests
+
+By default the workflow uses two separate sessions: the coder implements, the
+tester writes tests independently with a fresh context (`context: fresh`).
+This independence is the main defence against the coder and tester reinforcing
+the same misunderstanding of the spec.
+
+When independence is not needed (simple epics, tight token budget, unambiguous
+acceptance criteria), you can collapse both roles into one session:
+
+```bash
+# CLI flag — overrides anything in the progress YAML
+scripts/aw-run --single-agent BE-07
+
+# Or declare it per-epic in the progress YAML (auto-detected, no flag needed)
+# agent_mode: single          # in the epic entry
+```
+
+**What changes:**
+
+| | Split mode (default) | Single-agent mode |
+|---|---|---|
+| Nodes that run | `implement` then `write-tests` (separate sessions) | `implement-and-test` (one session) |
+| Tester context | Fresh — no implementation memory | Full implementation context |
+| Progress marker | `review:` (standard) | `review:` prefixed with `[SINGLE-AGENT]` |
+| Post-`run-tests` path | Identical | Identical |
+
+**What does NOT change:** `run-tests`, `fix-blocked`, `rerun-tests`,
+`arbitrate`, `ci-check`, `promote-complete`, `commit` — the entire
+post-implementation DAG is identical.
+
+**The `[SINGLE-AGENT]` marker** is written to the progress file's `review:`
+field by the `implement-and-test` node. It is a permanent, searchable audit
+trail that future agents and humans can grep for to find epics where the test
+independence guarantee was not upheld.
+
+**When to avoid single-agent mode:**
+- High-risk epics (auth, migrations, external APIs)
+- Epics where the spec is ambiguous enough that a second reading matters
+- Any epic that has previously needed `arbitrate` in split mode
+
+See `docs/agent-rules/skills/implement-and-test/SKILL.md` for the full
+procedure the agent follows.
 
 ---
 

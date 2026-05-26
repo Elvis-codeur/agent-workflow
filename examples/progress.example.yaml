@@ -99,6 +99,10 @@ epics:
     title: Dashboard — list and filter items
     area: dashboard
     status: planned
+    # agent_mode: single — one agent handles both implement and test-writing.
+    # Omit this field (or set to 'split') for the default two-agent model.
+    # CLI override: scripts/aw-run --single-agent APP-03
+    agent_mode: single
     depends_on: [APP-02]
     summary: >
       Build the main dashboard page that lists items for the authenticated user.

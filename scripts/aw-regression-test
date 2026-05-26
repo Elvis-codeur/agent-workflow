@@ -336,6 +336,7 @@ class TestArchonWorkflowSchema(RegressionTest):
             "ci-check",
             "fix-ci",
             "rerun-ci",
+            "implement-and-test",
             "promote-complete",
             "commit",
             "update-context",
@@ -356,7 +357,7 @@ class TestArchonWorkflowSchema(RegressionTest):
         if not yamls:
             self.skipTest("no rendered test YAML found")
         d = _yaml.safe_load(yamls[-1].read_text())
-        ai_nodes = {"implement", "write-tests", "fix-blocked", "arbitrate", "fix-ci", "commit"}
+        ai_nodes = {"implement", "write-tests", "fix-blocked", "arbitrate", "fix-ci", "implement-and-test", "commit"}
         for node in d.get("nodes", []):
             if node["id"] in ai_nodes:
                 self.assertIn(
@@ -990,13 +991,144 @@ class TestMultiProviderContract(RegressionTest):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SUITE 7 — Single-agent mode
+# ══════════════════════════════════════════════════════════════════════════════
+class TestSingleAgentMode(RegressionTest):
+    """Verify that aw-configure.py correctly detects and outputs single-agent mode."""
+
+    def _run_configure(self, *extra_flags, tests_json="[]"):
+        """Helper: call aw-configure.py and return the parsed JSON output."""
+        import subprocess as _subprocess
+        r = _subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "aw-configure.py"),
+             "TEST-01", "backend", tests_json, *extra_flags],
+            capture_output=True, text=True,
+        )
+        return r, json.loads(r.stdout.strip()) if r.stdout.strip() else {}
+
+    def test_configure_default_agent_mode_is_split(self):
+        """With no flags and no epic YAML, agent_mode defaults to 'split'."""
+        r, out = self._run_configure()
+        self.assertHas(
+            out, "agent_mode",
+            breakage="configure JSON missing 'agent_mode' key — template when: conditions that"
+                     " reference $configure.output.agent_mode will always fail",
+            fix="Add 'agent_mode' to the result dict in scripts/aw-configure.py",
+        )
+        self.assertEqual(
+            out.get("agent_mode"), "split",
+            "agent_mode should default to 'split' when --single-agent is not passed",
+        )
+
+    def test_configure_single_agent_flag(self):
+        """--single-agent flag must set agent_mode to 'single' in the JSON output."""
+        r, out = self._run_configure("--single-agent")
+        self.assertEqual(
+            out.get("agent_mode"), "single",
+            "--single-agent flag did not set agent_mode='single' in configure output\n"
+            "Update aw-configure.py: --single-agent must set agent_mode to 'single'",
+        )
+
+    def test_configure_single_agent_skips_implement_is_orthogonal(self):
+        """--single-agent does not force skip_implement; the phase-skip logic is orthogonal."""
+        r, out = self._run_configure("--single-agent")
+        # skip_implement should still be 'false' when status is 'planned'
+        self.assertEqual(
+            out.get("skip_implement"), "false",
+            "--single-agent should NOT force skip_implement=true — that is controlled"
+            " by epic status and --skip-implement flag independently",
+        )
+
+    def test_aw_run_single_agent_flag_accepted(self):
+        """scripts/aw-run --single-agent must be accepted without error."""
+        r = run(
+            ["bash", "scripts/aw-run", "--single-agent", "--dry-run", "X"],
+            cwd=ROOT,
+        )
+        self.assertEqual(
+            r.returncode, 0,
+            f"aw-run rejected --single-agent flag\n{r.stderr[:300]}",
+        )
+
+    def test_rendered_yaml_has_implement_and_test_node(self):
+        """The rendered workflow YAML must contain the implement-and-test node."""
+        import yaml as _yaml
+        runs_dir = ROOT / ".archon" / "workflows" / ".runs"
+        yamls = sorted(runs_dir.glob("*TEST*REGRESSION*.yaml"))
+        if not yamls:
+            self.skipTest("no rendered test YAML found — run test_template_renders_without_error first")
+        d = _yaml.safe_load(yamls[-1].read_text())
+        ids = {n["id"] for n in d.get("nodes", [])}
+        self.assertHas(
+            ids, "implement-and-test",
+            breakage="'implement-and-test' node missing from rendered YAML —"
+                     " single-agent mode will fall through to split mode silently",
+            fix="Re-add the implement-and-test node to aw-master-loop.template.yaml.tmpl",
+        )
+
+    def test_implement_and_test_when_condition_references_agent_mode(self):
+        """The implement-and-test node's when: must check agent_mode == 'single'.
+        If it's missing, the node runs in split mode too and both paths fire."""
+        template = ROOT / ".archon" / "workflows" / "aw-master-loop.template.yaml.tmpl"
+        txt = template.read_text()
+        # Find the implement-and-test node block
+        idx = txt.find("- id: implement-and-test")
+        self.assertGreater(idx, 0, "implement-and-test node not found in template")
+        block = txt[idx:idx + 400]
+        self.assertIn(
+            "agent_mode", block,
+            "implement-and-test node when: does not reference agent_mode —"
+            " it would fire even in split mode.\n"
+            "Fix: add \"&& $configure.output.agent_mode == 'single'\" to the when: condition",
+        )
+
+    def test_split_implement_excludes_single_mode(self):
+        """The split-mode 'implement' node must not run in single-agent mode."""
+        template = ROOT / ".archon" / "workflows" / "aw-master-loop.template.yaml.tmpl"
+        txt = template.read_text()
+        idx = txt.find("- id: implement\n")
+        self.assertGreater(idx, 0, "implement node not found in template")
+        block = txt[idx:idx + 300]
+        self.assertIn(
+            "agent_mode", block,
+            "split-mode 'implement' node when: does not exclude single-agent mode —"
+            " both implement and implement-and-test would run simultaneously.\n"
+            "Fix: add \"&& $configure.output.agent_mode == 'split'\" to the when: condition",
+        )
+
+    def test_skill_file_exists(self):
+        """skills/implement-and-test/SKILL.md must exist for agents to load the skill."""
+        skill = ROOT / "skills" / "implement-and-test" / "SKILL.md"
+        self.assertTrue(
+            skill.exists(),
+            f"Skill file missing at {skill} — agents in single-agent mode have no procedure\n"
+            "Create skills/implement-and-test/SKILL.md",
+        )
+
+    def test_skill_contains_single_agent_marker(self):
+        """The SKILL.md must mention the [SINGLE-AGENT] marker that agents write to the
+        progress file. If it's missing, agents won't know to add the audit trail."""
+        skill = ROOT / "skills" / "implement-and-test" / "SKILL.md"
+        if not skill.exists():
+            self.skipTest("SKILL.md not found")
+        self.assertIn(
+            "[SINGLE-AGENT]",
+            skill.read_text(),
+            "SKILL.md does not mention [SINGLE-AGENT] marker — agents won't mark the"
+            " progress file with the audit trail\n"
+            "Add [SINGLE-AGENT] prefix instructions to skills/implement-and-test/SKILL.md",
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Runner
 # ══════════════════════════════════════════════════════════════════════════════
 SUITES = {
-    "archon":    [TestArchonDatabase, TestArchonCLI, TestArchonWorkflowSchema],
-    "pi":        [TestPiContract],
-    "providers": [TestMultiProviderContract],
-    "scripts":   [TestOurScripts],
+    "archon":       [TestArchonDatabase, TestArchonCLI, TestArchonWorkflowSchema],
+    "pi":           [TestPiContract],
+    "providers":    [TestMultiProviderContract],
+    "single-agent": [TestSingleAgentMode],
+    "scripts":      [TestOurScripts],
 }
 
 

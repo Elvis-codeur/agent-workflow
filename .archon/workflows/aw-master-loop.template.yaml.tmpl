@@ -69,6 +69,7 @@ nodes:
       _flags=""
       [[ "{{SKIP_IMPLEMENT}}"   == "true" ]] && _flags="$_flags --skip-implement"
       [[ "{{SKIP_WRITE_TESTS}}" == "true" ]] && _flags="$_flags --skip-write-tests"
+      [[ "{{SINGLE_AGENT}}"     == "true" ]] && _flags="$_flags --single-agent"
       python3 scripts/aw-configure.py $read-epic.output.epic_id $read-epic.output.scope $read-epic.output.tests_paths ${_flags:+$_flags}
     timeout: 30000
 
@@ -81,7 +82,7 @@ nodes:
   # or when the user passes --skip-implement / --tests-only / --reuse-tests.
   - id: implement
     depends_on: [configure]
-    when: "$configure.output.skip_implement == 'false'"
+    when: "$configure.output.skip_implement == 'false' && $configure.output.agent_mode == 'split'"
     provider: {{CODER_PROVIDER}}
     model: {{CODER_MODEL}}
     idle_timeout: 120000
@@ -119,7 +120,7 @@ nodes:
   - id: write-tests
     depends_on: [implement, configure]
     trigger_rule: none_failed_min_one_success
-    when: "$configure.output.skip_write_tests == 'false'"
+    when: "$configure.output.skip_write_tests == 'false' && $configure.output.agent_mode == 'split'"
     provider: {{TESTER_PROVIDER}}
     model: {{TESTER_MODEL}}
     context: fresh
@@ -142,12 +143,78 @@ nodes:
       - Do NOT modify implementation files.
       - Do NOT update the progress YAML status.
 
+  # ---------------------------------------------------------------- single-agent (implement + test)
+  # When agent_mode == 'single' the coder handles both implementation AND
+  # test-writing in one continuous session — no fresh tester context.
+  # This skips the separate 'implement' and 'write-tests' nodes.
+  #
+  # When to use: simple epics, or when independent tester review is not needed.
+  # The progress file is marked [SINGLE-AGENT] to make the lack of separation
+  # explicit and auditable.
+  #
+  # Enabled by:
+  #   epic field  agent_mode: single   (in progress.*.yaml)
+  #   CLI flag    scripts/aw-run --single-agent EPIC
+  - id: implement-and-test
+    depends_on: [configure]
+    when: "$configure.output.agent_mode == 'single' && $configure.output.skip_implement == 'false'"
+    provider: {{CODER_PROVIDER}}
+    model: {{CODER_MODEL}}
+    idle_timeout: 120000
+    prompt: |
+      You are the sole agent for epic "$read-epic.output.epic_id" (single-agent mode).
+      You will implement the epic AND write its tests in this single session.
+      There is no separate tester agent.
+
+      ## Step 0 — read context first (do this before anything else)
+      1. CODEBASE-SUMMARY.md           ← module layout, gate commands, test index
+      2. docs/gotchas/INDEX.md          ← known bugs; skip gotchas whose scope doesn't overlap
+      3. progress.$read-epic.output.scope.yaml   ← confirm epic status + acceptance criteria
+
+      ## Part 1 — Implement
+      Implement `$read-epic.output.implementation_paths`.
+      Acceptance criteria:
+      $read-epic.output.implementation_acceptance
+      Spec section: $read-epic.output.spec_section
+
+      Rules:
+      - Implement ONLY the acceptance bullets. No extra features.
+      - Do NOT write test files yet.
+      - Run the gate commands listed in CODEBASE-SUMMARY.md before proceeding.
+      - Shell tip: append `|| true` to grep/find/ls existence checks.
+
+      ## Part 2 — Write tests (same session, no context reset)
+      After Part 1 gates are green, write the test files at:
+      $read-epic.output.tests_paths
+
+      Tests acceptance criteria:
+      $read-epic.output.tests_acceptance
+
+      Rules:
+      - Write tests that verify each acceptance bullet independently.
+      - Do NOT run the tests (the workflow's run-tests node does that).
+      - Do NOT modify implementation files during this part.
+
+      ## Part 3 — Update the progress file
+      Mark the epic `status: review` with a note that explicitly records
+      single-agent mode. Use exactly this format for the review field:
+
+        review: >
+          [SINGLE-AGENT] Implemented and tested in one session by the same
+          agent without independent tester review. YYYY-MM-DD.
+          Implementation: all acceptance bullets satisfied; gates green.
+          Tests: written at $read-epic.output.tests_paths (not run by this agent).
+
+      Commit the implementation + test files + updated progress YAML together:
+        git add -A
+        git commit -m "feat($read-epic.output.scope): $read-epic.output.epic_id implement + tests [single-agent]"
+
   # ---------------------------------------------------------------- tester (run)
   # trigger_rule: none_failed_min_one_success — runs when write-tests completed
   # OR was intentionally skipped (reuse-tests / skip-write-tests modes),
   # but NOT when write-tests failed.
   - id: run-tests
-    depends_on: [write-tests, configure]
+    depends_on: [write-tests, implement-and-test, configure]
     trigger_rule: none_failed_min_one_success
     bash: |
       bash scripts/aw-run-tests.sh $read-epic.output.scope \
@@ -406,7 +473,7 @@ nodes:
   # .archon/state/iterate-decision-<epic> so scripts/aw-run can decide whether
   # to recurse, cleanup, or hard-fail. Always runs (trigger_rule: all_done).
   - id: decide
-    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, promote-complete, commit, update-context, configure, ci-check, rerun-ci]
+    depends_on: [run-tests, rerun-tests, arbitrate, ask-human, promote-complete, commit, update-context, configure, ci-check, rerun-ci, implement-and-test]
     trigger_rule: all_done
     bash: |
       # Do NOT double-quote these: Archon already single-quotes each substituted
