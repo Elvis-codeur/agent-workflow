@@ -325,6 +325,7 @@ class TestArchonWorkflowSchema(RegressionTest):
         ids = {n["id"] for n in d.get("nodes", [])}
         for node in [
             "read-epic",
+            "configure",
             "implement",
             "write-tests",
             "run-tests",
@@ -332,6 +333,10 @@ class TestArchonWorkflowSchema(RegressionTest):
             "rerun-tests",
             "arbitrate",
             "ask-human",
+            "ci-check",
+            "fix-ci",
+            "rerun-ci",
+            "promote-complete",
             "commit",
             "update-context",
             "decide",
@@ -351,7 +356,7 @@ class TestArchonWorkflowSchema(RegressionTest):
         if not yamls:
             self.skipTest("no rendered test YAML found")
         d = _yaml.safe_load(yamls[-1].read_text())
-        ai_nodes = {"implement", "write-tests", "fix-blocked", "arbitrate", "commit"}
+        ai_nodes = {"implement", "write-tests", "fix-blocked", "arbitrate", "fix-ci", "commit"}
         for node in d.get("nodes", []):
             if node["id"] in ai_nodes:
                 self.assertIn(
@@ -604,7 +609,7 @@ class TestOurScripts(RegressionTest):
             r.returncode,
             0,
             "aw-run accepted bare pi model 'sonnet' — validation broken\n"
-            "check_pi_model() in scripts/aw-run must reject models without '/'",
+            "check_model() in scripts/aw-run must reject pi models without '/'",
         )
         self.assertIn(
             "not a valid Pi model ref",
@@ -628,6 +633,64 @@ class TestOurScripts(RegressionTest):
             r.returncode,
             0,
             f"aw-run rejected valid pi model 'github-copilot/claude-sonnet-4.6'\n{r.stderr[:300]}",
+        )
+
+    def test_aw_run_accepts_valid_claude_model(self):
+        """claude:sonnet must be accepted (short alias; no '/' required for Claude Code)."""
+        r = run(
+            [
+                "bash",
+                "scripts/aw-run",
+                "--coder",
+                "claude:sonnet",
+                "--dry-run",
+                "X",
+            ],
+            cwd=ROOT,
+        )
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"aw-run rejected valid claude model 'claude:sonnet'\n{r.stderr[:300]}\n"
+            "check_model() must accept any non-empty model string for the claude provider",
+        )
+
+    def test_aw_run_accepts_valid_codex_model(self):
+        """codex:gpt-5.3-codex must be accepted."""
+        r = run(
+            [
+                "bash",
+                "scripts/aw-run",
+                "--coder",
+                "codex:gpt-5.3-codex",
+                "--dry-run",
+                "X",
+            ],
+            cwd=ROOT,
+        )
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"aw-run rejected valid codex model 'codex:gpt-5.3-codex'\n{r.stderr[:300]}\n"
+            "check_model() must accept any non-empty model string for the codex provider",
+        )
+
+    def test_aw_run_rejects_unknown_provider(self):
+        """An unrecognised provider such as 'openai:...' must produce a clear error."""
+        r = run(
+            ["bash", "scripts/aw-run", "--coder", "openai:gpt-4o", "--dry-run", "X"],
+            cwd=ROOT,
+        )
+        self.assertNotEqual(
+            r.returncode,
+            0,
+            "aw-run accepted unknown provider 'openai' — validation broken\n"
+            "check_model() in scripts/aw-run must reject providers not in {pi, claude, codex}",
+        )
+        self.assertIn(
+            "unknown provider",
+            r.stderr + r.stdout,
+            "aw-run rejected unknown provider but without the expected error message",
         )
 
     def test_aw_run_all_dry_run(self):
@@ -685,6 +748,7 @@ class TestOurScripts(RegressionTest):
         )
 
     def test_aw_decide_exhausted(self):
+        """aw-decide.sh must output EXHAUSTED when arbitrate JSON contains exhausted:true."""
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(["git", "init"], cwd=tmp, capture_output=True)
             r = run(
@@ -692,11 +756,9 @@ class TestOurScripts(RegressionTest):
                     "bash",
                     str(ROOT / "scripts" / "aw-decide.sh"),
                     "EPIC-X",
-                    "fail",
-                    "fail",
-                    "done",
-                    '{"exhausted": true}',
-                    "",
+                    "",                       # $2 commit_out (empty = no commit)
+                    '{"exhausted": true}',    # $3 arb_json
+                    "",                       # $4 ask-human output
                 ],
                 cwd=tmp,
             )
@@ -817,12 +879,124 @@ print('ok')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SUITE 6 — Multi-provider contract (pi, claude, codex)
+# ══════════════════════════════════════════════════════════════════════════════
+class TestMultiProviderContract(RegressionTest):
+    """Verify that aw-run and aw-inspect correctly support pi, claude, and codex providers."""
+
+    def test_claude_binary_in_path(self):
+        """Claude Code CLI must be in PATH for 'claude:...' models to work.
+        Install: curl -fsSL https://claude.ai/install.sh | bash"""
+        self.assertHas(
+            shutil.which("claude") or "",
+            "claude",
+            breakage="'claude' binary missing from PATH — scripts/aw-run --coder claude:sonnet will fail",
+            fix="curl -fsSL https://claude.ai/install.sh | bash  (or set CLAUDE_BIN_PATH)",
+        )
+
+    def test_codex_binary_in_path(self):
+        """Codex CLI must be in PATH for 'codex:...' models to work.
+        Install: npm install -g @openai/codex"""
+        self.assertHas(
+            shutil.which("codex") or "",
+            "codex",
+            breakage="'codex' binary missing from PATH — scripts/aw-run --coder codex:gpt-5.3-codex will fail",
+            fix="npm install -g @openai/codex",
+        )
+
+    def test_aw_run_claude_full_model_id_accepted(self):
+        """Full Claude model ID (e.g. claude:claude-sonnet-4-6) must be accepted."""
+        r = run(
+            ["bash", "scripts/aw-run", "--coder", "claude:claude-sonnet-4-6", "--dry-run", "X"],
+            cwd=ROOT,
+        )
+        self.assertEqual(
+            r.returncode, 0,
+            f"aw-run rejected full claude model ID\n{r.stderr[:300]}",
+        )
+
+    def test_aw_inspect_detects_provider_from_db(self):
+        """aw-inspect must read the provider from node_started events in archon.db.
+        If Archon changes the event data format, provider detection silently breaks."""
+        archon_db = pathlib.Path.home() / ".archon" / "archon.db"
+        if not archon_db.exists():
+            self.skipTest("archon.db not found — run at least one workflow first")
+        import sqlite3 as _sqlite3
+        db = _sqlite3.connect(archon_db)
+        db.row_factory = _sqlite3.Row
+        rows = db.execute(
+            "SELECT data FROM remote_agent_workflow_events "
+            "WHERE event_type='node_started' AND step_name='implement' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchall()
+        if not rows:
+            self.skipTest("no 'implement' node_started event in DB yet")
+        data = json.loads(rows[0]["data"] or "{}")
+        self.assertIn(
+            "provider",
+            data,
+            "node_started event data does not contain 'provider' key — "
+            "aw-inspect detect_provider() reads this field to route session lookup. "
+            "Update detect_provider() in scripts/aw-inspect to match the new schema.",
+        )
+
+    def test_claude_session_directory_exists(self):
+        """Claude Code stores sessions at ~/.claude/projects/<path-slug>/<uuid>.jsonl.
+        aw-inspect --session uses this path for claude provider."""
+        claude_projects = pathlib.Path.home() / ".claude" / "projects"
+        if not shutil.which("claude"):
+            self.skipTest("claude not in PATH")
+        self.assertTrue(
+            claude_projects.exists(),
+            f"Claude projects directory not found at {claude_projects} — "
+            "aw-inspect find_claude_session() will always return None. "
+            "Run at least one claude session to create the directory.",
+        )
+
+    def test_codex_session_db_exists(self):
+        """Codex stores sessions in ~/.codex/state_5.sqlite.
+        aw-inspect --session uses this DB for codex provider."""
+        codex_db = pathlib.Path.home() / ".codex" / "state_5.sqlite"
+        if not shutil.which("codex"):
+            self.skipTest("codex not in PATH")
+        self.assertTrue(
+            codex_db.exists(),
+            f"Codex session DB not found at {codex_db} — "
+            "aw-inspect find_codex_session() will always return None. "
+            "Run at least one codex session to create the DB.",
+        )
+
+    def test_codex_session_db_has_threads_table(self):
+        """aw-inspect queries ~/.codex/state_5.sqlite threads table with cwd column.
+        If Codex renames the table or column, session lookup silently breaks."""
+        codex_db = pathlib.Path.home() / ".codex" / "state_5.sqlite"
+        if not codex_db.exists():
+            self.skipTest("~/.codex/state_5.sqlite not found")
+        import sqlite3 as _sqlite3
+        db = _sqlite3.connect(codex_db)
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertHas(
+            tables, "threads",
+            breakage="Codex 'threads' table missing — aw-inspect find_codex_session() will crash",
+            fix="Update find_codex_session() in scripts/aw-inspect to use the new table name",
+        )
+        cols = {r[1] for r in db.execute("PRAGMA table_info(threads)")}
+        for col in ("id", "cwd", "created_at"):
+            self.assertHas(
+                cols, col,
+                breakage=f"Codex threads.{col} column missing — aw-inspect session lookup broken",
+                fix=f"Update find_codex_session() in scripts/aw-inspect to use the new column name for '{col}'",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Runner
 # ══════════════════════════════════════════════════════════════════════════════
 SUITES = {
-    "archon": [TestArchonDatabase, TestArchonCLI, TestArchonWorkflowSchema],
-    "pi": [TestPiContract],
-    "scripts": [TestOurScripts],
+    "archon":    [TestArchonDatabase, TestArchonCLI, TestArchonWorkflowSchema],
+    "pi":        [TestPiContract],
+    "providers": [TestMultiProviderContract],
+    "scripts":   [TestOurScripts],
 }
 
 

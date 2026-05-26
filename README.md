@@ -37,6 +37,7 @@ Safe to re-run — never overwrites files you have already customised.
 │   ├── check-invariants.sh             ← add your architectural checks here
 │   ├── aw-run                          ← master-loop launcher (Archon)
 │   ├── aw-configure.py                 ← phase-skip decision logic (configure node)
+│   ├── aw-ci-preflight.sh              ← fast CI gates run before commit
 │   ├── aw-run-all.sh                   ← topological orchestrator (all epics)
 │   ├── aw-run-tests.sh                 ← project-agnostic test dispatcher
 │   ├── aw-decide.sh                    ← loop decision: CONVERGED/ITERATE/FAILED
@@ -45,7 +46,7 @@ Safe to re-run — never overwrites files you have already customised.
 │   ├── update-codebase-summary.sh      ← regenerates CODEBASE-SUMMARY.md
 │   └── gotchas-index.sh                ← regenerates docs/gotchas/INDEX.md
 ├── .archon/workflows/
-│   └── aw-master-loop.template.yaml.tmpl   ← 11-node DAG, rendered per-run
+│   └── aw-master-loop.template.yaml.tmpl   ← 16-node DAG, rendered per-run
 ├── .pi/
 │   ├── extensions/
 │   │   ├── bash-normalize-exit.ts      ← fixes grep exit 1 false alarms
@@ -66,7 +67,8 @@ Safe to re-run — never overwrites files you have already customised.
         ├── fix-blocked/SKILL.md
         ├── aw-master-loop/SKILL.md
         ├── record-gotcha/SKILL.md
-        └── commit/SKILL.md
+        ├── commit/SKILL.md
+        └── update-docs/SKILL.md
 .claude/skills      → docs/agent-rules/skills  (symlink)
 .opencode/commands  → docs/agent-rules/skills  (symlink)
 .pi/skills          → docs/agent-rules/skills  (symlink)
@@ -100,17 +102,47 @@ scripts/aw-run-all.sh --dry-run
 # Resume after a stop
 scripts/aw-run-all.sh --from BE-37
 
-# Override models per-run
+# Override models per-run — Pi, Claude Code, or Codex
+
+# Pi (default — GitHub Copilot tier)
 scripts/aw-run \
-  --coder  pi:github-copilot/gpt-5.3-codex \
+  --coder  pi:github-copilot/claude-sonnet-4.6 \
   --tester pi:github-copilot/gpt-5.3-codex \
+  BE-31
+
+# Claude Code CLI  (requires: curl -fsSL https://claude.ai/install.sh | bash)
+scripts/aw-run \
+  --coder  claude:sonnet \
+  --tester claude:sonnet \
+  --master claude:opus \
+  BE-31
+
+# OpenAI Codex CLI  (requires: npm install -g @openai/codex)
+scripts/aw-run \
+  --coder  codex:gpt-5.3-codex \
+  --tester codex:gpt-5.3-codex \
+  BE-31
+
+# Mix providers freely per role
+scripts/aw-run \
+  --coder  claude:sonnet \
+  --tester codex:gpt-5.3-codex \
+  --master pi:github-copilot/gpt-5.2 \
   BE-31
 ```
 
-**Defaults** (chosen for throughput, not just capability):
-- coder: `pi:github-copilot/gpt-5.3-codex` — code-optimised, 400K context
-- tester: `pi:github-copilot/gpt-5.3-codex` — fastest model, sufficient for test writing
+**Defaults** (Pi provider, chosen for throughput):
+- coder: `pi:github-copilot/claude-sonnet-4.6` — strong coding ability, 1M context
+- tester: `pi:github-copilot/gpt-5.3-codex` — different model from coder = independent signal; code-optimised
 - master: `pi:github-copilot/gpt-5.2` — strong reasoning, used only for arbitration
+
+**All three providers are fully supported:**
+
+| Provider | Format | Prerequisite |
+|---|---|---|
+| `pi` | `pi:<catalog-provider>/<model-id>` | Pi coding agent (default) |
+| `claude` | `claude:<alias-or-full-id>` | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| `codex` | `codex:<model-id>` | `npm install -g @openai/codex` |
 
 **Phase-skip flags** (save tokens on repeat runs):
 ```bash
@@ -128,11 +160,13 @@ Full design: `docs/archon-master-loop.md`.
 ## What happens inside one epic run
 
 ```
-read-epic → implement → write-tests → run-tests ──(PASS)──► ci-check → promote-complete → commit → update-context → decide
-                                           │
-                                           └──(FAIL)──► fix-blocked → rerun-tests
-                                                                           │
-                                                              (still FAIL) └──► arbitrate → ask-human
+read-epic → configure → implement → write-tests → run-tests ──(PASS)──► ci-check ──► promote-complete → commit → update-context → decide
+                                                    │                        │
+                                                    │                        └──(FAIL)──► fix-ci → rerun-ci ──► promote-complete
+                                                    │
+                                                    └──(FAIL)──► fix-blocked → rerun-tests
+                                                                                    │
+                                                                       (still FAIL) └──► arbitrate → ask-human
 ```
 
 1. **read-epic** — parses the epic JSON from `progress.*.yaml`
@@ -142,14 +176,18 @@ read-epic → implement → write-tests → run-tests ──(PASS)──► ci-c
 4. **write-tests** — tester writes test files independently (fresh context). *Skipped automatically* if all test files already exist.
 5. **run-tests** — project-specific bash runner (`scripts/aw-test-<scope>.sh`)
 6. **fix-blocked** — coder fixes failures, up to `--max-fix-attempts` rounds
-7. **arbitrate** — master classifies the coder/tester disagreement into one of 8 buckets, emits `coder_right` / `tester_right` / `unsure`
-8. **ask-human** — only fires on `unsure`; the one point where the workflow blocks on input
-9. **promote-complete** — when tests + CI pass, updates `progress.<scope>.yaml` to `status: complete`
-10. **commit** — runs `/commit` skill; never pushes, never opens a PR
-11. **update-context** — regenerates `CODEBASE-SUMMARY.md` (zero AI tokens); appends one-line epic log entry
-11. **decide** — writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED`; `aw-run` reads this and either cleans up or loops
+7. **rerun-tests** — reruns tests after fix-blocked
+8. **arbitrate** — master classifies the coder/tester disagreement into one of 8 buckets, emits `coder_right` / `tester_right` / `unsure`
+9. **ask-human** — only fires on `unsure`; the one point where the workflow blocks on input
+10. **ci-check** — runs fast CI gates (`aw-ci-preflight.sh`): lint, typecheck, lockfile integrity, migrations
+11. **fix-ci** — coder fixes CI-only issues (format drift, stale locks, missing migrations); does not touch tests
+12. **rerun-ci** — reruns CI gates after fix-ci
+13. **promote-complete** — when tests + CI pass, updates `progress.<scope>.yaml` to `status: complete`
+14. **commit** — runs `/commit` skill; never pushes, never opens a PR
+15. **update-context** — regenerates `CODEBASE-SUMMARY.md` (zero AI tokens); appends one-line epic log entry
+16. **decide** — writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED`; `aw-run` reads this and either cleans up or loops
 
-All five AI nodes have `idle_timeout: 120s` — a throttled model that stops responding is killed within 2 minutes.
+All six AI nodes (`implement`, `write-tests`, `fix-blocked`, `arbitrate`, `fix-ci`, `commit`) have `idle_timeout: 120s` — a throttled model that stops responding is killed within 2 minutes.
 
 ---
 
@@ -159,8 +197,8 @@ All five AI nodes have `idle_timeout: 120s` — a throttled model that stops res
 archon serve                                          # web UI at localhost:3090
 scripts/aw-inspect BE-31                              # cost + duration per node
 scripts/aw-inspect BE-31 --events | less              # every file read, every bash command
-scripts/aw-inspect BE-31 --session                    # path to Pi session JSONL
-pi --resume "$(scripts/aw-inspect BE-31 --session)"  # replay + ask follow-ups
+scripts/aw-inspect BE-31 --session                    # print resume command for detected provider
+eval "$(scripts/aw-inspect BE-31 --session)"          # resume directly (pi / claude / codex)
 ```
 
 Full guide: `docs/observability.md`.
@@ -179,7 +217,7 @@ When GitHub Copilot (or any provider) throttles a session, you now see:
   Reason     : out_of_credits
   Resets at  : 2026-05-23 15:10:00 (in 37 min)
 
-  💡 Switch model: scripts/aw-run --coder pi:github-copilot/gpt-5.3-codex EPIC
+  💡 Switch model: scripts/aw-run --coder pi:github-copilot/claude-sonnet-4.6 EPIC
 ============================================================
 ```
 

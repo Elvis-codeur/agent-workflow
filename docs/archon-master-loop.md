@@ -34,7 +34,7 @@ pi --resume "$(scripts/aw-inspect BE-31 --session)"
 
 ---
 
-## DAG — 12 nodes
+## DAG — 16 nodes
 
 ```
 read-epic
@@ -42,6 +42,8 @@ read-epic
         └─► implement ─(if skip_implement=false)──────────────────────────  │
               └─► write-tests ─(if skip_write_tests=false)─────────────── │ │
                     └─► run-tests ──(PASS)──► ci-check ──► promote-complete ──► commit ──► update-context ──► decide
+                          │                    │
+                          │                    └──(FAIL)──► fix-ci ──► rerun-ci ──► promote-complete
                           │
                           └──(FAIL)──► fix-blocked ──► rerun-tests
                                                            │
@@ -59,12 +61,15 @@ read-epic
 | `rerun-tests` | bash | same as run-tests, after fix-blocked |
 | `arbitrate` | AI (master) | classifies disagreement into one of 8 buckets, emits verdict JSON |
 | `ask-human` | AI (master) | prompts the user when arbitrate returns `unsure` |
+| `ci-check` | bash | runs `scripts/aw-ci-preflight.sh`: lint, typecheck, lockfiles, migrations |
+| `fix-ci` | AI (coder) | fixes CI-only failures (format drift, stale locks, missing migrations) |
+| `rerun-ci` | bash | re-runs CI gates after fix-ci |
 | `promote-complete` | bash | marks epic `status: complete` in `progress.<scope>.yaml` after tests+CI pass |
 | `commit` | AI (master) | runs `/commit` skill — never pushes, never opens a PR |
 | `update-context` | bash | regenerates `CODEBASE-SUMMARY.md`; appends epic log line |
 | `decide` | bash | writes `CONVERGED`/`EXHAUSTED`/`ITERATE`/`FAILED` to `.archon/state/` |
 
-`implement`, `write-tests`, `fix-blocked`, `arbitrate`, and `commit` all have
+`implement`, `write-tests`, `fix-blocked`, `arbitrate`, `fix-ci`, and `commit` all have
 `idle_timeout: 120000` (2 minutes). If the model stops generating tokens for
 2 minutes, Archon kills the node and `decide` writes `FAILED` so `aw-run` can
 break the loop rather than hanging for hours.
@@ -228,8 +233,8 @@ See `docs/observability.md` for the full guide. Quick reference:
 archon serve                                   # web UI at localhost:3090
 scripts/aw-inspect BE-31                       # cost + duration per node
 scripts/aw-inspect BE-31 --events | less       # every tool call
-scripts/aw-inspect BE-31 --session             # path to Pi session JSONL
-pi --resume "$(scripts/aw-inspect BE-31 --session)"  # replay conversation
+scripts/aw-inspect BE-31 --session             # print resume command (auto-detects pi/claude/codex)
+eval "$(scripts/aw-inspect BE-31 --session)"   # execute it directly
 ```
 
 ---
@@ -245,7 +250,7 @@ pi --resume "$(scripts/aw-inspect BE-31 --session)"  # replay conversation
 | **GOTCHA-005** — `aw-decide.sh` marker written to worktree, not main repo | `state=UNKNOWN`; all convergences treated as failures; merges skipped | Use `--git-common-dir` not `--show-toplevel` to find repo root |
 | **GOTCHA-006** — pnpm install stdout leaks "Scope:" before PASS | `run-tests.output` is multiline; `== 'PASS'` never matches | Use `&>/dev/null` on install commands, not just `2>/dev/null` |
 
-Full write-ups: `docs/gotchas/GOTCHA-00{1,2,3}-*.md`.
+Full write-ups: `docs/gotchas/GOTCHA-00{1,2,3,4,5,6}-*.md`.
 
 ---
 
@@ -254,7 +259,7 @@ Full write-ups: `docs/gotchas/GOTCHA-00{1,2,3}-*.md`.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Node hangs for 20+ min on a trivial command | GitHub Copilot throttled — model queued | Switch model; `idle_timeout: 120s` will kill it and `decide` writes FAILED |
-| Each epic takes 30+ min (was 5 min manually) | 3–4 sequential Pi sessions per epic hit rate limit | Use gpt-5.3-codex (coder) + gemini-3-flash (tester) — both have higher throughput |
+| Each epic takes 30+ min (was 5 min manually) | 3–4 sequential Pi sessions per epic hit rate limit | Use gpt-5.3-codex (coder) + gpt-5.3-codex (tester) — both have higher throughput than claude-sonnet-4.6 under sequential load |
 | `claude.rate_limit_event` in log with `overageDisabledReason: out_of_credits` | 5-hour or monthly token quota reached | Wait for reset (shown in `resetsAt`), or switch provider |
 
 ---
@@ -274,7 +279,9 @@ Full write-ups: `docs/gotchas/GOTCHA-00{1,2,3}-*.md`.
 └── settings.json                          ← Pi skill path configuration
 scripts/
 ├── aw-run                                 ← renders template + calls archon
-├── aw-run-all.sh                          ← topological orchestrator (34+ epics)
+├── aw-configure.py                        ← phase-skip decision logic (configure node)
+├── aw-ci-preflight.sh                     ← fast CI gates run before commit
+├── aw-run-all.sh                          ← topological orchestrator
 ├── aw-run-tests.sh                        ← project-agnostic test dispatcher
 ├── aw-decide.sh                           ← CONVERGED/EXHAUSTED/ITERATE/FAILED
 ├── aw-inspect                             ← observability CLI
@@ -290,5 +297,8 @@ docs/
     ├── INDEX.md                           ← auto-generated; agents read at Step 0
     ├── GOTCHA-001-pi-bash-exit-1.md
     ├── GOTCHA-002-archon-double-quote-node-output.md
-    └── GOTCHA-003-archon-worktree-no-uv-sync.md
+    ├── GOTCHA-003-archon-worktree-no-uv-sync.md
+    ├── GOTCHA-004-test-runner-must-exit-zero.md
+    ├── GOTCHA-005-aw-decide-worktree-marker-path.md
+    └── GOTCHA-006-pnpm-stdout-leaks-into-pass-check.md
 ```

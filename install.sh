@@ -148,7 +148,7 @@ fi
 
 # Scripts for the master loop + gotchas index
 printf "\n  Scripts:\n"
-for s in aw-run aw-run-all.sh aw-run-tests.sh aw-decide.sh gotchas-index.sh \
+for s in aw-run aw-configure.py aw-run-all.sh aw-run-tests.sh aw-decide.sh gotchas-index.sh \
          update-codebase-summary.sh aw-inspect aw-ci-preflight.sh; do
     if [[ -f "$SCRIPTS_SRC/$s" ]]; then
         copy_file "$SCRIPTS_SRC/$s" "$TARGET/scripts/$s"
@@ -205,8 +205,8 @@ Next steps:
   6. (Optional) Try the Archon master-loop on one small epic:
        → scripts/aw-run --dry-run <EPIC-ID>             # render only
        → scripts/aw-run <EPIC-ID>                       # run for real
-     Defaults: master=claude:sonnet, coder=codex:gpt-5-codex,
-               tester=claude:sonnet, max-fix=3, max-arb=3,
+     Defaults: master=pi:github-copilot/gpt-5.2, coder=pi:github-copilot/claude-sonnet-4.6,
+               tester=pi:github-copilot/gpt-5.3-codex, max-fix=3, max-arb=3,
                autocommit ON, worktree cleanup ON.
      Requires `archon` v0.3.10+ in PATH (https://github.com/coleam00/Archon).
 EOF

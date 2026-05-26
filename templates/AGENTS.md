@@ -82,19 +82,37 @@ without babysitting it:
 
 ```bash
 scripts/aw-run <EPIC-ID>
-# zero flags = defaults: master=pi:github-copilot/claude-sonnet-4.6, coder=pi:github-copilot/claude-sonnet-4.6,
-#              tester=pi:github-copilot/claude-sonnet-4.6, max-fix=3, max-arb=3, autocommit ON,
+# zero flags = defaults: master=pi:github-copilot/gpt-5.2, coder=pi:github-copilot/claude-sonnet-4.6,
+#              tester=pi:github-copilot/gpt-5.3-codex, max-fix=3, max-arb=3, autocommit ON,
 #              worktree cleanup ON.
 
-scripts/aw-run --coder pi:kiro/minimax-m2-5 \
-               --tester pi:github-copilot/claude-sonnet-4.6 \
+# --- Use any of the three supported providers ---
+
+# Pi (default — GitHub Copilot tier)
+scripts/aw-run --coder  pi:github-copilot/claude-sonnet-4.6 \
+               --tester pi:github-copilot/gpt-5.3-codex \
+               EPIC-AUTH-001
+
+# Claude Code CLI (install: curl -fsSL https://claude.ai/install.sh | bash)
+scripts/aw-run --coder  claude:sonnet \
+               --tester claude:sonnet \
                --master claude:opus \
+               EPIC-AUTH-001
+
+# OpenAI Codex CLI (install: npm install -g @openai/codex)
+scripts/aw-run --coder  codex:gpt-5.3-codex \
+               --tester codex:gpt-5.3-codex \
+               EPIC-AUTH-001
+
+# Mix providers freely
+scripts/aw-run --coder  claude:sonnet \
+               --tester codex:gpt-5.3-codex \
+               --master pi:github-copilot/gpt-5.2 \
                --max-fix-attempts 5 \
-               --no-autocommit \
                EPIC-AUTH-001
 ```
 
-The wrapper renders `.archon/workflows/aw-master-loop.template.yaml` with
+The wrapper renders `.archon/workflows/aw-master-loop.template.yaml.tmpl` with
 the chosen per-role provider/model triples and invokes Archon in an
 isolated git worktree. See `docs/archon-master-loop.md` for the full
 design. Requires `archon` v0.3.10+ in `PATH`

@@ -6,8 +6,8 @@
 #   scripts/aw-run [options] <EPIC-ID>
 #
 # Options:
-#   --coder    PROVIDER:MODEL           (default: pi:github-copilot/gpt-5.3-codex)
-#   --tester   PROVIDER:MODEL           (default: pi:github-copilot/gemini-3-flash-preview)
+#   --coder    PROVIDER:MODEL           (default: pi:github-copilot/claude-sonnet-4.6)
+#   --tester   PROVIDER:MODEL           (default: pi:github-copilot/gpt-5.3-codex)
 #   --master   PROVIDER:MODEL           (default: pi:github-copilot/gpt-5.2)
 #   --max-impl-iterations N             (default: 10)
 #   --max-fix-attempts   N              (default: 3)
@@ -32,22 +32,37 @@
 #   - status == review AND test files exist in worktree → also skip write-tests
 #
 # PROVIDER must be one of: pi, claude, codex.
-# For pi, MODEL must be <catalog-provider>/<model-id>, e.g.:
-#   pi:github-copilot/gpt-5.3-codex
-#   pi:openai/gpt-4o
-#   pi:google/gemini-2.5-pro
-#   pi:openrouter/qwen/qwen3-coder  (nested slash OK)
+#
+#   pi    — Pi coding agent. MODEL must be <catalog-provider>/<model-id>:
+#             pi:github-copilot/claude-sonnet-4.6
+#             pi:github-copilot/gpt-5.3-codex
+#             pi:openai/gpt-4o
+#             pi:google/gemini-2.5-pro
+#             pi:openrouter/qwen/qwen3-coder   (nested slash OK)
+#
+#   claude — Claude Code CLI. MODEL is an alias or full ID:
+#             claude:sonnet          (latest Claude Sonnet)
+#             claude:opus            (latest Claude Opus)
+#             claude:haiku           (latest Claude Haiku)
+#             claude:claude-sonnet-4-6  (pin exact version)
+#             Requires `claude` CLI in PATH (curl -fsSL https://claude.ai/install.sh | bash)
+#
+#   codex  — OpenAI Codex CLI. MODEL is the model ID:
+#             codex:gpt-5.3-codex
+#             codex:o3
+#             Requires `codex` CLI in PATH (npm install -g @openai/codex)
 #
 # Autocommit and worktree cleanup are ON by default.
 
 set -euo pipefail
 
 # Model defaults — chosen for throughput, not just capability.
-# claude-sonnet-4.6 is the most capable but throttles severely under
-# sequential load (GitHub Copilot tier). Codex models have higher code
-# throughput; gemini-3-flash is the fastest for simpler tasks.
+# Pi (github-copilot tier) throttles under sequential session load; switch to
+# claude: or codex: provider to avoid rate limits when Pi is saturated.
 #
-# Override any role per-run:  scripts/aw-run --coder pi:github-copilot/claude-sonnet-4.6 EPIC
+# Override any role per-run:
+#   scripts/aw-run --coder claude:sonnet EPIC
+#   scripts/aw-run --coder codex:gpt-5.3-codex --tester codex:gpt-5.3-codex EPIC
 DEFAULT_CODER="pi:github-copilot/claude-sonnet-4.6"  # strong coding, 1M ctx
 DEFAULT_TESTER="pi:github-copilot/gpt-5.3-codex"    # different model = independent signal; code-optimised
 DEFAULT_MASTER="pi:github-copilot/gpt-5.2"           # strong reasoning for arbitration
@@ -66,7 +81,7 @@ AUTOCOMMIT=1
 CLEAN_WORKTREE=1
 MERGE_ON_SUCCESS=0
 
-usage() { sed -n '2,28p' "$0"; }
+usage() { sed -n '2,58p' "$0"; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -102,19 +117,51 @@ read -r CODER_PROV  CODER_MDL  < <(split "$CODER")
 read -r TESTER_PROV TESTER_MDL < <(split "$TESTER")
 read -r MASTER_PROV MASTER_MDL < <(split "$MASTER")
 
-# Validate Pi model refs: must contain a '/' (catalog-provider/model-id).
-check_pi_model() {
+# Validate model refs per provider.
+check_model() {
     local role="$1" prov="$2" mdl="$3"
-    if [[ "$prov" == "pi" && "$mdl" != */* ]]; then
-        echo "error: $role model '$mdl' is not a valid Pi model ref." >&2
-        echo "  Pi requires format: <catalog-provider>/<model-id>" >&2
-        echo "  Examples: github-copilot/claude-sonnet-4.6  openai/gpt-4o  google/gemini-2.5-pro" >&2
-        exit 2
-    fi
+    case "$prov" in
+        pi)
+            if [[ "$mdl" != */* ]]; then
+                echo "error: $role model '$mdl' is not a valid Pi model ref." >&2
+                echo "  Pi requires format: <catalog-provider>/<model-id>" >&2
+                echo "  Examples: pi:github-copilot/claude-sonnet-4.6  pi:openai/gpt-4o  pi:google/gemini-2.5-pro" >&2
+                exit 2
+            fi
+            ;;
+        claude)
+            if [[ -z "$mdl" ]]; then
+                echo "error: $role claude model cannot be empty." >&2
+                echo "  Examples: claude:sonnet  claude:opus  claude:claude-sonnet-4-6" >&2
+                exit 2
+            fi
+            if ! command -v claude &>/dev/null; then
+                echo "error: 'claude' CLI not found in PATH." >&2
+                echo "  Install: curl -fsSL https://claude.ai/install.sh | bash" >&2
+                exit 2
+            fi
+            ;;
+        codex)
+            if [[ -z "$mdl" ]]; then
+                echo "error: $role codex model cannot be empty." >&2
+                echo "  Examples: codex:gpt-5.3-codex  codex:o3" >&2
+                exit 2
+            fi
+            if ! command -v codex &>/dev/null; then
+                echo "error: 'codex' CLI not found in PATH." >&2
+                echo "  Install: npm install -g @openai/codex" >&2
+                exit 2
+            fi
+            ;;
+        *)
+            echo "error: $role unknown provider '$prov'. Must be one of: pi, claude, codex." >&2
+            exit 2
+            ;;
+    esac
 }
-check_pi_model "--coder"  "$CODER_PROV"  "$CODER_MDL"
-check_pi_model "--tester" "$TESTER_PROV" "$TESTER_MDL"
-check_pi_model "--master" "$MASTER_PROV" "$MASTER_MDL"
+check_model "--coder"  "$CODER_PROV"  "$CODER_MDL"
+check_model "--tester" "$TESTER_PROV" "$TESTER_MDL"
+check_model "--master" "$MASTER_PROV" "$MASTER_MDL"
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 TEMPLATE="$REPO_ROOT/.archon/workflows/aw-master-loop.template.yaml.tmpl"
@@ -292,9 +339,9 @@ print('     Wait for the reset, then re-run:')
 print('       scripts/aw-run [--from EPIC-ID]')
 print()
 print('     Or switch to a non-throttled model now:')
-print('       scripts/aw-run --coder pi:github-copilot/gpt-5.3-codex  (current default)')
-print('       scripts/aw-run --coder pi:github-copilot/gemini-3-flash-preview')
-print('       scripts/aw-run --coder pi:github-copilot/gpt-5.2')
+print('       scripts/aw-run --coder pi:github-copilot/gpt-5.3-codex  (default Pi coder)')
+print('       scripts/aw-run --coder claude:sonnet                     (Claude Code CLI)')
+print('       scripts/aw-run --coder codex:gpt-5.3-codex               (OpenAI Codex CLI)')
 print('=' * 60)
 PYEOF
 }

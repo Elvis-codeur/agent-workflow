@@ -66,7 +66,7 @@ the affected script and suggests a concrete fix.
 |---|---|
 | Template renders without error | No runs possible |
 | Rendered YAML passes `archon validate` (0 errors) | Archon rejects the workflow at startup |
-| All 11 nodes present (read-epic through decide) | Missing nodes silently skip the corresponding workflow phase |
+| All 16 nodes present (read-epic through decide) | Missing nodes silently skip the corresponding workflow phase |
 | AI nodes have `idle_timeout` | Throttled model hangs the node for hours |
 | No double-quoted `$node.output` in bash: blocks | GOTCHA-002 re-introduced: JSON with `"` breaks bash |
 | AUTOCOMMIT markers present | `--no-autocommit` stops working; always commits |

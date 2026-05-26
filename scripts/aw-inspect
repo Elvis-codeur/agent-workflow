@@ -6,28 +6,40 @@ Usage:
   scripts/aw-inspect EPIC-ID [--events] [--session] [--cost]
 
   --events    print full tool-call event log
-  --session   print path to the Pi session JSONL file (open with pi /resume)
+  --session   print the session file/ID for the last AI node, with the
+              correct resume command for the detected provider
+              (pi --resume ..., claude --resume ..., codex resume ...)
   --cost      show per-node cost + duration summary (default)
 
 Examples:
   scripts/aw-inspect BE-31
   scripts/aw-inspect FE-02 --events | less
-  pi --resume $(scripts/aw-inspect BE-31 --session)
+
+  # Resume the last agent session (works for pi, claude, and codex):
+  eval "$(scripts/aw-inspect BE-31 --session)"
 """
 import sys
 import json
 import sqlite3
 import pathlib
 import argparse
-import subprocess
+import re
+import unicodedata
 
-ARCHON_DB = pathlib.Path.home() / ".archon" / "archon.db"
+ARCHON_DB   = pathlib.Path.home() / ".archon" / "archon.db"
 PI_SESSIONS = pathlib.Path.home() / ".pi" / "agent" / "sessions"
+CLAUDE_PROJECTS = pathlib.Path.home() / ".claude" / "projects"
+CODEX_DB    = pathlib.Path.home() / ".codex" / "state_5.sqlite"
+
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
 
 def get_db():
     db = sqlite3.connect(ARCHON_DB)
     db.row_factory = sqlite3.Row
     return db
+
 
 def find_run(db, epic_id):
     """Find the most recent workflow run for an epic."""
@@ -37,41 +49,161 @@ def find_run(db, epic_id):
         ORDER BY started_at DESC LIMIT 1
     """, (epic_id, f"%{epic_id.replace('-', '_').lower()}%")).fetchall()
     if not rows:
-        # Try case-insensitive search
-        rows = db.execute("""
-            SELECT * FROM remote_agent_workflow_runs
-            ORDER BY started_at DESC
-        """).fetchall()
-        rows = [r for r in rows if epic_id.lower() in r['workflow_name'].lower()
+        rows = db.execute(
+            "SELECT * FROM remote_agent_workflow_runs ORDER BY started_at DESC"
+        ).fetchall()
+        rows = [r for r in rows
+                if epic_id.lower() in r['workflow_name'].lower()
                 or r['user_message'] == epic_id]
     return rows[0] if rows else None
 
+
+def detect_provider(events):
+    """Return the provider used for the last AI node (pi | claude | codex | unknown)."""
+    provider = "unknown"
+    ai_nodes = {"implement", "write-tests", "fix-blocked", "arbitrate", "fix-ci", "commit"}
+    for e in reversed(list(events)):
+        if e['event_type'] == 'node_started' and e['step_name'] in ai_nodes:
+            try:
+                d = json.loads(e['data']) if e['data'] else {}
+                p = d.get('provider', '')
+                if p:
+                    provider = p
+                    break
+            except Exception:
+                pass
+    return provider
+
+
+# ---------------------------------------------------------------------------
+# Session finders (one per provider)
+# ---------------------------------------------------------------------------
+
 def find_pi_session(worktree_path):
-    """Find the Pi session file for the worktree path."""
+    """Return newest Pi session JSONL for the worktree, or None."""
     if not PI_SESSIONS.exists():
         return None
+    tail = worktree_path.split("/")[-1].lower()
     slug = worktree_path.replace("/", "-").replace(" ", "_").lstrip("-")
     for d in PI_SESSIONS.iterdir():
-        if slug in d.name or worktree_path.split("/")[-1] in d.name:
-            jsonls = sorted(d.glob("*.jsonl"), reverse=True)
-            if jsonls:
-                return jsonls[0]
-    # Broader search
-    epic_safe = worktree_path.split("/")[-1].lower()
-    for d in PI_SESSIONS.iterdir():
-        if epic_safe in d.name.lower():
+        if slug in d.name or tail in d.name.lower():
             jsonls = sorted(d.glob("*.jsonl"), reverse=True)
             if jsonls:
                 return jsonls[0]
     return None
 
+
+def _claude_slug(path: str) -> str:
+    """Reproduce Claude Code's project directory naming from a filesystem path.
+
+    Algorithm (reverse-engineered from ~/.claude/projects directory names):
+      1. Drop non-ASCII bytes (strip accents/special chars entirely).
+      2. Replace each '/' with '--'.
+      3. Replace any remaining non-[a-zA-Z0-9] character with '-'.
+      4. Lowercase the whole string.
+    The result always starts with '-' because the original path starts with '/'.
+    """
+    p = path.encode("ascii", "ignore").decode()   # drop non-ASCII
+    p = p.replace("/", "--")                       # / → --
+    p = re.sub(r"[^a-zA-Z0-9-]", "-", p)          # other special → -
+    return p.lower()
+
+
+def find_claude_session(worktree_path):
+    """Return (session_id, jsonl_path) for the newest Claude Code session, or (None, None)."""
+    if not CLAUDE_PROJECTS.exists():
+        return None, None
+
+    tail = worktree_path.split("/")[-1].lower()   # e.g. task-archon-epic-be-31
+    slug = _claude_slug(worktree_path)
+
+    # Find the matching project directory.
+    best_dir = None
+    for d in CLAUDE_PROJECTS.iterdir():
+        if not d.is_dir():
+            continue
+        if d.name == slug or tail in d.name.lower():
+            best_dir = d
+            break
+
+    if best_dir is None:
+        return None, None
+
+    jsonls = sorted(best_dir.glob("*.jsonl"), reverse=True)
+    if not jsonls:
+        return None, None
+
+    # The JSONL filename is the session UUID.
+    session_id = jsonls[0].stem
+    return session_id, jsonls[0]
+
+
+def find_codex_session(worktree_path):
+    """Return the newest Codex thread ID for the worktree, or None."""
+    if not CODEX_DB.exists():
+        return None
+    try:
+        db = sqlite3.connect(CODEX_DB)
+        db.row_factory = sqlite3.Row
+        # Match on cwd column; Codex stores the exact worktree path.
+        rows = db.execute(
+            "SELECT id FROM threads WHERE cwd = ? ORDER BY created_at DESC LIMIT 1",
+            (worktree_path,)
+        ).fetchall()
+        if rows:
+            return rows[0]['id']
+        # Fallback: partial match on the last path segment.
+        tail = worktree_path.split("/")[-1]
+        rows = db.execute(
+            "SELECT id FROM threads WHERE cwd LIKE ? ORDER BY created_at DESC LIMIT 1",
+            (f"%{tail}%",)
+        ).fetchall()
+        return rows[0]['id'] if rows else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Resume command builder
+# ---------------------------------------------------------------------------
+
+def build_resume_cmd(provider, worktree_path):
+    """Return a shell command string that resumes the last session for the given provider."""
+    if provider == "pi":
+        sf = find_pi_session(worktree_path)
+        if sf:
+            return f'pi --resume "{sf}"'
+        return None
+
+    if provider == "claude":
+        session_id, sf = find_claude_session(worktree_path)
+        if session_id:
+            return f'claude --resume "{session_id}"'
+        return None
+
+    if provider == "codex":
+        thread_id = find_codex_session(worktree_path)
+        if thread_id:
+            return f'codex resume "{thread_id}"'
+        return None
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
 def show_cost(run, events):
     """Print per-node cost + duration table."""
-    print(f"\n  Epic:    {run['user_message']}")
-    print(f"  Run:     {run['workflow_name']}")
-    print(f"  Status:  {run['status']}")
-    print(f"  Started: {run['started_at']}")
-    print(f"  Ended:   {run['completed_at'] or '(running)'}")
+    provider = detect_provider(events)
+
+    print(f"\n  Epic:     {run['user_message']}")
+    print(f"  Run:      {run['workflow_name']}")
+    print(f"  Status:   {run['status']}")
+    print(f"  Provider: {provider}")
+    print(f"  Started:  {run['started_at']}")
+    print(f"  Ended:    {run['completed_at'] or '(running)'}")
     print()
     print(f"  {'Node':<16} {'Status':<10} {'Duration':>10} {'Cost USD':>10}  Output preview")
     print(f"  {'-'*16} {'-'*10} {'-'*10} {'-'*10}  {'-'*30}")
@@ -110,7 +242,12 @@ def show_cost(run, events):
         print(f"  {node:<16} {status:<10} {dur_str:>10} {cost_str:>10}  {out}")
 
     print(f"  {'-'*16} {'-'*10} {'-'*10} {'-'*10}")
-    cost_str = f"${total_cost:.4f}" if total_cost else "(GitHub Copilot — $0)"
+    if total_cost:
+        cost_str = f"${total_cost:.4f}"
+    elif provider in ("pi",):
+        cost_str = "(GitHub Copilot — $0)"
+    else:
+        cost_str = "-"
     print(f"  {'TOTAL':<16} {'':10} {' ':10} {cost_str:>10}")
 
     # Tool call counts
@@ -123,6 +260,7 @@ def show_cost(run, events):
     if tool_counts:
         print(f"\n  Tool calls: {', '.join(f'{k}x{v}' for k,v in sorted(tool_counts.items(), key=lambda x:-x[1]))}")
 
+
 def show_events(events):
     """Print full event log."""
     for e in events:
@@ -133,9 +271,9 @@ def show_events(events):
         if etype == 'tool_called':
             tool = d.get('tool_name', '?')
             inp = d.get('tool_input', {})
-            if tool == 'bash':
+            if tool.lower() in ('bash',):
                 detail = inp.get('command', '')[:80].replace('\n', '↵')
-            elif tool in ('read', 'write', 'edit'):
+            elif tool.lower() in ('read', 'write', 'edit'):
                 detail = inp.get('path', inp.get('file_path', ''))
             else:
                 detail = str(inp)[:80]
@@ -144,19 +282,48 @@ def show_events(events):
             out = str(d.get('node_output', d.get('error', d.get('reason', '')))).replace('\n', '↵')
             print(f"  {ts}  [{node:12s}]  {etype.upper()}  {out[:100]}")
 
+
+def show_session(run, events):
+    """Print the resume command for the last AI-node session."""
+    provider = detect_provider(events)
+    cmd = build_resume_cmd(provider, run['working_path'])
+
+    if cmd:
+        # Print an eval-able command so callers can do: eval "$(aw-inspect X --session)"
+        print(cmd)
+    else:
+        provider_hints = {
+            "pi":     "~/.pi/agent/sessions/",
+            "claude": "~/.claude/projects/",
+            "codex":  "codex resume  (run interactively to pick a session)",
+        }
+        hint = provider_hints.get(provider, "unknown provider")
+        print(
+            f"No session found for provider='{provider}' worktree={run['working_path']}\n"
+            f"  Session storage: {hint}",
+            file=sys.stderr
+        )
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main():
     p = argparse.ArgumentParser(description="Inspect an Archon master-loop epic run")
     p.add_argument('epic_id', help='Epic ID, e.g. BE-31')
-    p.add_argument('--events', action='store_true', help='Print full tool-call event log')
-    p.add_argument('--session', action='store_true', help='Print Pi session JSONL path for /resume')
-    p.add_argument('--cost', action='store_true', help='Show cost/duration per node (default)')
+    p.add_argument('--events',  action='store_true', help='Print full tool-call event log')
+    p.add_argument('--session', action='store_true',
+                   help='Print the resume command for the last AI session (pi/claude/codex)')
+    p.add_argument('--cost',    action='store_true', help='Show cost/duration per node (default)')
     args = p.parse_args()
 
     if not ARCHON_DB.exists():
         print("archon.db not found at", ARCHON_DB, file=sys.stderr)
         sys.exit(1)
 
-    db = get_db()
+    db  = get_db()
     run = find_run(db, args.epic_id)
     if not run:
         print(f"No run found for {args.epic_id}", file=sys.stderr)
@@ -169,20 +336,15 @@ def main():
     """, (run['id'],)).fetchall()
 
     if args.session:
-        sf = find_pi_session(run['working_path'])
-        if sf:
-            print(sf)
-        else:
-            print(f"No Pi session file found for {run['working_path']}", file=sys.stderr)
-            sys.exit(1)
+        show_session(run, events)
         return
 
     if args.events:
         show_events(events)
         return
 
-    # Default: cost summary
     show_cost(run, events)
+
 
 if __name__ == '__main__':
     main()
