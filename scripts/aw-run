@@ -26,6 +26,9 @@
 #                        (write tests if needed, then run them)
 #   --reuse-tests      shorthand: --skip-implement --skip-write-tests
 #                        (run existing tests on existing code, no AI writes)
+#   --single-agent     one agent handles implement + test-writing in one session
+#                        (no independent tester; epic is marked [SINGLE-AGENT])
+#                        can also be set per-epic via agent_mode: single in the progress YAML
 #
 # Auto-detection (no flags needed):
 #   - epic status == review or complete  → skip implement automatically
@@ -72,6 +75,7 @@ MASTER="$DEFAULT_MASTER"
 FROM_BRANCH=""
 SKIP_IMPLEMENT=false
 SKIP_WRITE_TESTS=false
+SINGLE_AGENT=false
 MAX_IMPL=10
 MAX_FIX=3
 MAX_ARB=3
@@ -97,6 +101,7 @@ while [[ $# -gt 0 ]]; do
         --skip-write-tests)    SKIP_WRITE_TESTS=true; shift ;;
         --tests-only)          SKIP_IMPLEMENT=true; shift ;;         # write tests if needed, then run
         --reuse-tests)         SKIP_IMPLEMENT=true; SKIP_WRITE_TESTS=true; shift ;; # run existing tests
+        --single-agent)        SINGLE_AGENT=true; shift ;;
         --no-autocommit)       AUTOCOMMIT=0; shift ;;
         --keep-worktree)       CLEAN_WORKTREE=0; shift ;;
         --merge-on-success)    MERGE_ON_SUCCESS=1; shift ;;
@@ -183,6 +188,7 @@ sed \
     -e "s|{{MAX_FIX_ATTEMPTS}}|$MAX_FIX|g" \
     -e "s|{{SKIP_IMPLEMENT}}|$SKIP_IMPLEMENT|g" \
     -e "s|{{SKIP_WRITE_TESTS}}|$SKIP_WRITE_TESTS|g" \
+    -e "s|{{SINGLE_AGENT}}|$SINGLE_AGENT|g" \
     "$TEMPLATE" > "$OUT"
 
 if [[ "$AUTOCOMMIT" -eq 0 ]]; then
@@ -202,6 +208,7 @@ echo "  cleanup     = $CLEAN_WORKTREE"
 echo "  auto-merge  = $MERGE_ON_SUCCESS"
 [[ "$SKIP_IMPLEMENT" == "true" ]]   && echo "  skip-impl   = yes (will be refined by configure node)"
 [[ "$SKIP_WRITE_TESTS" == "true" ]] && echo "  skip-tests  = yes (will be refined by configure node)"
+[[ "$SINGLE_AGENT" == "true" ]]     && echo "  single-agent = yes (will be confirmed by configure node)"
 
 if [[ "$DRY" -eq 1 ]]; then
     exit 0
