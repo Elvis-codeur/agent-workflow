@@ -41,17 +41,12 @@ fi
 
 # ── Run pytest ────────────────────────────────────────────────────────────────
 # Use system python3 directly — uv sync deadlocks on sphinx/docs extras.
+# Capture all output to a temp file; only print it to stdout on failure.
+# On success stdout MUST be the bare word "PASS" (GOTCHA-004).
 TMPOUT="$(mktemp)"
-RC=0
 
 # shellcheck disable=SC2086   # word-splitting of TEST_PATHS is intentional
-if PYTHONPATH=src python3 -m pytest $TEST_PATHS -q 2>&1 | tee "$TMPOUT"; then
-  RC=0
-else
-  RC=1
-fi
-
-if [[ $RC -eq 0 ]]; then
+if PYTHONPATH=src python3 -m pytest $TEST_PATHS -q >"$TMPOUT" 2>&1; then
   rm -f "$TMPOUT"
   echo "PASS"
 else
