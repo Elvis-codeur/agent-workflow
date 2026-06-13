@@ -341,6 +341,16 @@ rather than relying on prose rules they may forget in long sessions.
 | `/record-gotcha` | "record this bug" | Writes to `docs/gotchas/` + epic's `gotchas:` list |
 | `/commit` | (called by `commit` node) | lint → typecheck → test → stage → conventional commit |
 | `/update-docs` | "update docs" | keep README, design docs, gotchas, and regression tests in sync |
+| `/archon` | "run/create an archon workflow", "set up archon" | drive + author Archon workflows, config, and `.archon/` setup |
+
+### Required companion: the Archon CLI
+
+The master loop **runs on** Archon — `aw-run` invokes `archon workflow run`.
+**The Archon CLI (≥ v0.3.10) must be installed alongside this workflow** in every
+repo that runs the loop: <https://github.com/coleam00/Archon>. The bundled
+`/archon` skill teaches agents to drive and author Archon workflows, but it is the
+CLI binary that actually executes them. `aw-run` hard-fails if `archon` is not in
+`PATH`; `install.sh` warns when it is missing.
 
 ---
 

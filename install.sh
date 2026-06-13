@@ -292,6 +292,14 @@ Next steps:
      Requires `archon` v0.3.10+ in PATH (https://github.com/coleam00/Archon).
 EOF
 
+# ── Archon CLI preflight ──────────────────────────────────────────────────────
+# The loop runs ON Archon; the bundled /archon skill is only a helper. Warn (do
+# not fail) if the CLI is missing so the operator installs it before running.
+if ! command -v archon &>/dev/null; then
+    printf "\n${YELLOW}⚠  Archon CLI not found in PATH.${NC}\n"
+    printf "   The master loop (scripts/aw-run) needs it. Install: https://github.com/coleam00/Archon\n"
+fi
+
 # ── Cleanup temp clone (curl-pipe mode) ──────────────────────────────────────
 if [[ -n "$CLONED_DIR" ]]; then
     rm -rf "$CLONED_DIR"
