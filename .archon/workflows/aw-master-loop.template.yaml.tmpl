@@ -61,11 +61,22 @@ nodes:
   - id: configure
     depends_on: [read-epic]
     bash: |
+      set -euo pipefail
+
+      # ── Guardrail: validate read-epic output before anything else ──────
+      # If the master AI node hit a rate limit / credit / auth wall, its
+      # output is raw error text instead of JSON.  Catch it here so the
+      # DAG fails *at the boundary* instead of downstream nodes receiving
+      # empty $read-epic.output.* fields and producing cryptic errors.
+      if ! python3 scripts/aw-validate-output.py --schema EPIC $read-epic.output; then
+        echo "FATAL: read-epic output validation failed — provider likely rate-limited or returned an error" >&2
+        exit 1
+      fi
+
       # Build optional flags from template-substituted booleans.
       # Using shell variables avoids a trailing '\' before an empty
       # {{CONFIGURE_FLAGS}} placeholder (which bash passes as a literal
       # backslash arg to Python — BUG-015).
-      set -euo pipefail
       _flags=""
       [[ "{{SKIP_IMPLEMENT}}"   == "true" ]] && _flags="$_flags --skip-implement"
       [[ "{{SKIP_WRITE_TESTS}}" == "true" ]] && _flags="$_flags --skip-write-tests"
