@@ -694,6 +694,35 @@ class TestOurScripts(RegressionTest):
             "aw-run rejected unknown provider but without the expected error message",
         )
 
+    def test_aw_run_deepseek_expands_to_pi(self):
+        """deepseek:<model> must be accepted and rendered as provider=pi model=deepseek/<model>."""
+        r = run(
+            ["bash", "scripts/aw-run", "--coder", "deepseek:deepseek-v4-pro", "--dry-run", "X"],
+            cwd=ROOT,
+        )
+        self.assertEqual(r.returncode, 0, f"aw-run rejected deepseek:deepseek-v4-pro\n{r.stderr[:300]}")
+        self.assertIn(
+            "pi / deepseek/deepseek-v4-pro", r.stdout,
+            "deepseek: shorthand did not expand to provider=pi model=deepseek/<model>\n"
+            "Check expand_deepseek() in scripts/aw-run",
+        )
+
+    def test_aw_run_rejects_bare_deepseek(self):
+        """deepseek: with an empty model must be rejected."""
+        r = run(["bash", "scripts/aw-run", "--coder", "deepseek:", "--dry-run", "X"], cwd=ROOT)
+        self.assertNotEqual(
+            r.returncode, 0,
+            "aw-run accepted an empty deepseek model — check_model() must reject it",
+        )
+
+    def test_aw_run_rejects_deepseek_with_slash(self):
+        """deepseek:foo/bar must be rejected — the deepseek/ prefix is added automatically."""
+        r = run(["bash", "scripts/aw-run", "--coder", "deepseek:foo/bar", "--dry-run", "X"], cwd=ROOT)
+        self.assertNotEqual(
+            r.returncode, 0,
+            "aw-run accepted a slashed deepseek model — check_model() must reject it",
+        )
+
     def test_aw_run_all_dry_run(self):
         script = ROOT / "scripts" / "aw-run-all.sh"
         if not script.exists():

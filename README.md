@@ -166,13 +166,23 @@ scripts/aw-run \
 - tester: `pi:github-copilot/gpt-5.3-codex` — different model from coder = independent signal; code-optimised
 - master: `pi:github-copilot/gpt-5.2` — strong reasoning, used only for arbitration
 
-**All three providers are fully supported:**
+**All four providers are fully supported:**
 
 | Provider | Format | Prerequisite |
 |---|---|---|
 | `pi` | `pi:<catalog-provider>/<model-id>` | Pi coding agent (default) |
 | `claude` | `claude:<alias-or-full-id>` | `curl -fsSL https://claude.ai/install.sh \| bash` |
 | `codex` | `codex:<model-id>` | `npm install -g @openai/codex` |
+| `deepseek` | `deepseek:<model-id>` (sugar for `pi:deepseek/<model-id>`) | DeepSeek configured in Pi/Archon (`DEEPSEEK_API_KEY`) |
+
+DeepSeek has no agentic CLI of its own — it runs through the Pi runtime, so
+`deepseek:deepseek-v4-pro` is shorthand for `pi:deepseek/deepseek-v4-pro`. Pass
+the bare model id; the `deepseek/` catalog prefix is added for you.
+
+```bash
+# DeepSeek for both roles
+scripts/aw-run --coder deepseek:deepseek-v4-pro --tester deepseek:deepseek-v4-flash BE-31
+```
 
 **Phase-skip flags** (save tokens on repeat runs):
 ```bash

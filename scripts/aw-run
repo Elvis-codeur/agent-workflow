@@ -34,7 +34,7 @@
 #   - epic status == review or complete  → skip implement automatically
 #   - status == review AND test files exist in worktree → also skip write-tests
 #
-# PROVIDER must be one of: pi, claude, codex.
+# PROVIDER must be one of: pi, claude, codex, deepseek.
 #
 #   pi    — Pi coding agent. MODEL must be <catalog-provider>/<model-id>:
 #             pi:github-copilot/claude-sonnet-4.6
@@ -54,6 +54,12 @@
 #             codex:gpt-5.3-codex
 #             codex:o3
 #             Requires `codex` CLI in PATH (npm install -g @openai/codex)
+#
+#   deepseek — DeepSeek via the Pi runtime. MODEL is the bare DeepSeek model id;
+#             `deepseek:<model>` is sugar for `pi:deepseek/<model>`:
+#             deepseek:deepseek-v4-pro
+#             deepseek:deepseek-v4-flash
+#             Requires DeepSeek configured in Pi/Archon (DEEPSEEK_API_KEY).
 #
 # Autocommit and worktree cleanup are ON by default.
 
@@ -158,8 +164,24 @@ check_model() {
                 exit 2
             fi
             ;;
+        deepseek)
+            # DeepSeek has no agentic CLI of its own; it runs through the Pi
+            # runtime's DeepSeek catalog. `deepseek:<model>` is sugar for
+            # `pi:deepseek/<model>` and is expanded after validation.
+            if [[ -z "$mdl" ]]; then
+                echo "error: $role deepseek model cannot be empty." >&2
+                echo "  Examples: deepseek:deepseek-v4-pro  deepseek:deepseek-v4-flash" >&2
+                exit 2
+            fi
+            if [[ "$mdl" == */* ]]; then
+                echo "error: $role deepseek model '$mdl' must not contain a slash." >&2
+                echo "  Pass the bare DeepSeek model id; the 'deepseek/' catalog prefix is added for you." >&2
+                echo "  Examples: deepseek:deepseek-v4-pro  deepseek:deepseek-v4-flash" >&2
+                exit 2
+            fi
+            ;;
         *)
-            echo "error: $role unknown provider '$prov'. Must be one of: pi, claude, codex." >&2
+            echo "error: $role unknown provider '$prov'. Must be one of: pi, claude, codex, deepseek." >&2
             exit 2
             ;;
     esac
@@ -167,6 +189,22 @@ check_model() {
 check_model "--coder"  "$CODER_PROV"  "$CODER_MDL"
 check_model "--tester" "$TESTER_PROV" "$TESTER_MDL"
 check_model "--master" "$MASTER_PROV" "$MASTER_MDL"
+
+# Expand the `deepseek:` shorthand to its real Pi runtime form:
+#   deepseek:<model>  →  provider=pi, model=deepseek/<model>
+# Done after validation so the template, archon invocation, and aw-inspect all
+# see a normal Pi model ref.
+expand_deepseek() {  # echoes: "<provider> <model>"
+    local prov="$1" mdl="$2"
+    if [[ "$prov" == "deepseek" ]]; then
+        echo "pi" "deepseek/$mdl"
+    else
+        echo "$prov" "$mdl"
+    fi
+}
+read -r CODER_PROV  CODER_MDL  < <(expand_deepseek "$CODER_PROV"  "$CODER_MDL")
+read -r TESTER_PROV TESTER_MDL < <(expand_deepseek "$TESTER_PROV" "$TESTER_MDL")
+read -r MASTER_PROV MASTER_MDL < <(expand_deepseek "$MASTER_PROV" "$MASTER_MDL")
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 TEMPLATE="$REPO_ROOT/.archon/workflows/aw-master-loop.template.yaml.tmpl"
