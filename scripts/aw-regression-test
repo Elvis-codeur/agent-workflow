@@ -744,6 +744,27 @@ class TestOurScripts(RegressionTest):
             "aw-run accepted an empty kimi model — check_model() must reject it",
         )
 
+    def _validate_commit(self, subject):
+        return run([sys.executable, str(ROOT / "scripts" / "validate_commit_msg.py"),
+                    "--message", subject])
+
+    def test_validate_commit_accepts_full_type_set(self):
+        """The validator must accept the full house type set, including perf/ci/style and '!'."""
+        for subj in ["feat(api): add endpoint", "perf: tighten loop",
+                     "ci: cache deps", "refactor!: rename fields", "Merge branch 'x'"]:
+            r = self._validate_commit(subj)
+            self.assertEqual(r.returncode, 0, f"validator rejected valid subject: {subj!r}\n{r.stderr}")
+
+    def test_validate_commit_rejects_vague_summary(self):
+        """The validator must reject placeholder summaries (forbidden-vague-summary rule)."""
+        for subj in ["chore: update", "fix: misc changes", "wip"]:
+            r = self._validate_commit(subj)
+            self.assertNotEqual(r.returncode, 0, f"validator accepted vague subject: {subj!r}")
+
+    def test_validate_commit_rejects_unknown_type(self):
+        r = self._validate_commit("frobnicate: do a thing")
+        self.assertNotEqual(r.returncode, 0, "validator accepted an unknown commit type")
+
     def test_aw_run_all_dry_run(self):
         script = ROOT / "scripts" / "aw-run-all.sh"
         if not script.exists():

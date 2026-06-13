@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# pre-commit — runs before every commit. Activated via:
+#   git config core.hooksPath .githooks   (the installer does this)
+#
+# This is the generic agent-workflow gate: it runs the architectural invariant
+# checks. Add your language linters below (ruff / biome / cargo fmt / gofmt) —
+# the repos in this workspace typically run `ruff check && ruff format --check`
+# on their source + tests here.
+set -euo pipefail
+
+PASS="\033[0;32m✓\033[0m"
+FAIL="\033[0;31m✗\033[0m"
+fail() { echo -e "$FAIL $1"; exit 1; }
+
+echo "pre-commit: running checks..."
+
+# ── Architectural invariants ──────────────────────────────────────────────────
+if [[ -x scripts/check-invariants.sh ]]; then
+    if ! scripts/check-invariants.sh; then
+        fail "architectural invariants failed (scripts/check-invariants.sh)"
+    fi
+    echo -e "$PASS invariants"
+fi
+
+# ── Language linters (uncomment / adapt for your stack) ───────────────────────
+# Python (ruff):
+#   if ! python3 -m ruff check src/ tests/ --quiet 2>/dev/null; then
+#       python3 -m ruff check src/ tests/
+#       fail "ruff lint failed. Run: python3 -m ruff check --fix src/ tests/"
+#   fi
+#   if ! python3 -m ruff format --check src/ tests/ --quiet 2>/dev/null; then
+#       python3 -m ruff format --check src/ tests/
+#       fail "ruff format failed. Run: python3 -m ruff format src/ tests/"
+#   fi
+#
+# TypeScript/JS (biome):
+#   pnpm exec biome check . || fail "biome failed"
+
+echo -e "$PASS pre-commit: all checks passed"

@@ -101,8 +101,19 @@ git status
 Check for:
 - accidentally included files (`.env`, large binaries, generated artifacts
   that should be gitignored)
+- **secrets / credentials / cookies** — never commit auth artifacts, API keys,
+  tokens, or exported browser cookies. If you see any, unstage and gitignore them.
 - debug prints, `console.log`, `TODO` comments introduced by you
 - leftover merge-conflict markers
+
+### Same-commit discipline
+
+If this change belongs to a tracked epic/story, the **same commit** must also:
+
+- **update `progress.yaml`** (status / progress_notes) — don't leave implemented
+  work undocumented or defer the status bump to a later commit;
+- **update the relevant docs** when behavior, APIs, models, configuration, or
+  operator-facing usage changed — don't defer obvious doc updates.
 
 ---
 
@@ -135,6 +146,11 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
 
 Derive the message from the actual diff, not from memory of what you
 intended to do.
+
+**The summary must state the purpose of the change, not a vague action.**
+`scripts/validate_commit_msg.py` (run by the `commit-msg` hook) rejects
+placeholder summaries like `update`, `misc`, `changes`, `wip`, `temp`,
+`fix stuff`. ✗ `chore: updates` → ✓ `chore(deps): bump ruff to 0.7.4`.
 
 ---
 

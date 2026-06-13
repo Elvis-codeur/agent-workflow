@@ -180,8 +180,17 @@ fi
 # CLAUDE.md
 copy_file "$TEMPLATES/CLAUDE.md" "$TARGET/CLAUDE.md"
 
-# Pre-commit config
-copy_file "$TEMPLATES/.pre-commit-config.yaml" "$TARGET/.pre-commit-config.yaml"
+# Git hooks (.githooks/, activated via core.hooksPath) — the enforced
+# commit-msg + pre-commit gate. Replaces the old .pre-commit-config.yaml.
+printf "\n  Git hooks:\n"
+if [[ -d "$TEMPLATES/.githooks" ]]; then
+    for _hook in "$TEMPLATES/.githooks"/*; do
+        [[ -e "$_hook" ]] || continue
+        copy_file "$_hook" "$TARGET/.githooks/$(basename "$_hook")"
+        chmod +x "$TARGET/.githooks/$(basename "$_hook")"
+    done
+fi
+# commit-msg validator lives in scripts/ (copied with the other scripts below).
 
 # CI workflow
 copy_file "$TEMPLATES/.github/workflows/ci.yml" "$TARGET/.github/workflows/ci.yml"
@@ -213,12 +222,19 @@ fi
 # Scripts for the master loop + gotchas index
 printf "\n  Scripts:\n"
 for s in aw-run aw-configure.py aw-run-all.sh aw-run-tests.sh aw-decide.sh gotchas-index.sh \
-         update-codebase-summary.sh aw-inspect aw-ci-preflight.sh aw-workspace; do
+         update-codebase-summary.sh aw-inspect aw-ci-preflight.sh aw-workspace \
+         validate_commit_msg.py; do
     if [[ -f "$SCRIPTS_SRC/$s" ]]; then
         copy_file "$SCRIPTS_SRC/$s" "$TARGET/scripts/$s"
         chmod +x "$TARGET/scripts/$s"
     fi
 done
+
+# Activate the versioned hooks for this clone (idempotent).
+if [[ -d "$TARGET/.git" ]] && [[ -d "$TARGET/.githooks" ]]; then
+    git -C "$TARGET" config core.hooksPath .githooks
+    ok "git config core.hooksPath .githooks"
+fi
 
 # Symlinks
 printf "\n  Symlinks:\n"
@@ -257,11 +273,12 @@ Next steps:
        → Document each rule in docs/agent-rules/architecture-invariants.md
 
   3. Uncomment the language tracks you use:
-       → .pre-commit-config.yaml  (Python / TypeScript / Rust sections)
+       → .githooks/pre-commit    (ruff / biome / cargo fmt sections)
        → .github/workflows/ci.yml (python / frontend / rust jobs)
 
-  4. Install pre-commit hooks (once, in your project):
-       pre-commit install --install-hooks
+  4. Git hooks are already active (core.hooksPath = .githooks):
+       → commit-msg  runs scripts/validate_commit_msg.py
+       → pre-commit  runs scripts/check-invariants.sh (+ your linters)
 
   5. Write your first progress file:
        → Use /write-progress or follow docs/agent-rules/skills/write-progress/SKILL.md

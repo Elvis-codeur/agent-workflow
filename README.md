@@ -61,10 +61,13 @@ are both accepted. Full guide: `docs/multi-repo-workspace.md`.
 ├── AGENTS.md                           ← fill in your invariants + layout
 ├── CODEBASE-SUMMARY.md                 ← pre-digested facts for agents (~600 tokens)
 ├── CLAUDE.md                           ← thin Claude Code pointer (do not edit)
-├── .pre-commit-config.yaml             ← uncomment the language tracks you use
+├── .githooks/                          ← versioned git hooks (core.hooksPath)
+│   ├── commit-msg                      ← runs scripts/validate_commit_msg.py
+│   └── pre-commit                      ← runs check-invariants.sh (+ your linters)
 ├── .github/workflows/ci.yml            ← uncomment the CI jobs you need
 ├── scripts/
 │   ├── check-invariants.sh             ← add your architectural checks here
+│   ├── validate_commit_msg.py          ← Conventional Commits + no-vague-summary gate
 │   ├── aw-run                          ← master-loop launcher (Archon)
 │   ├── aw-configure.py                 ← phase-skip decision logic (configure node)
 │   ├── aw-ci-preflight.sh              ← fast CI gates run before commit
@@ -110,7 +113,7 @@ are both accepted. Full guide: `docs/multi-repo-workspace.md`.
 
 1. **`AGENTS.md`** — add your project layout and architectural invariants.
 2. **`scripts/check-invariants.sh`** — add `check` calls for your project rules.
-3. **`.pre-commit-config.yaml` and `ci.yml`** — uncomment the language tracks you use.
+3. **`.githooks/pre-commit` and `ci.yml`** — uncomment the language tracks you use. Hooks are auto-activated (`core.hooksPath`); `commit-msg` enforces Conventional Commits via `validate_commit_msg.py`.
 4. **`scripts/aw-test-<scope>.sh`** — add project-specific test runners
    (e.g. `aw-test-backend.sh`, `aw-test-frontend.sh`) so the workflow runs
    the right tests for each epic scope.

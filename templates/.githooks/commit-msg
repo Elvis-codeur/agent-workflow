@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# commit-msg — enforce Conventional Commits + house rules on the subject line.
+# Activated via: git config core.hooksPath .githooks  (the installer does this).
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+python3 "$repo_root/scripts/validate_commit_msg.py" --file "$1"
