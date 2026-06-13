@@ -2,9 +2,12 @@
 # install.sh — inject the agent-workflow boilerplate into a target project.
 #
 # Usage:
-#   ./install.sh                    # installs into the current directory
-#   ./install.sh /path/to/project   # installs into the specified directory
-#   ./install.sh --force .          # overwrites files that already exist
+#   ./install.sh                      # installs into the current directory
+#   ./install.sh /path/to/project     # installs into the specified directory
+#   ./install.sh --force .            # overwrites files that already exist
+#   ./install.sh --workspace /path    # multi-repo mode: scaffold workspace.yaml
+#                                     # + scripts/aw-workspace at /path, then
+#                                     # install into each repo it lists
 #
 # Safe to re-run: existing files are not overwritten unless --force is passed.
 
@@ -34,17 +37,22 @@ SCRIPTS_SRC="$SCRIPT_DIR/scripts"
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 FORCE=false
+WORKSPACE=false
 TARGET=""
 
 for arg in "$@"; do
     case "$arg" in
-        --force) FORCE=true ;;
+        --force)     FORCE=true ;;
+        --workspace) WORKSPACE=true ;;
         *) TARGET="$arg" ;;
     esac
 done
 
 TARGET="${TARGET:-.}"
 TARGET="$(cd "$TARGET" && pwd)"
+
+# Absolute path to this installer, so workspace mode can re-exec it per repo.
+SELF="$SCRIPT_DIR/install.sh"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
@@ -95,11 +103,67 @@ make_symlink() {
     fi
 }
 
+# ── Workspace mode ────────────────────────────────────────────────────────────
+# Scaffold the orchestrator + manifest at the workspace root, then run the
+# normal single-repo install into each repo declared in the manifest.
+if [[ "$WORKSPACE" == "true" ]]; then
+    ROOT="$TARGET"
+    printf "\nInstalling agent-workflow WORKSPACE into: %s\n\n" "$ROOT"
+
+    # 1. Orchestrator script at the root.
+    copy_file "$SCRIPTS_SRC/aw-workspace" "$ROOT/scripts/aw-workspace"
+    chmod +x "$ROOT/scripts/aw-workspace"
+
+    # 2. Manifest — scaffold from template; never clobber a customised one.
+    if [[ -f "$ROOT/workspace.yaml" ]] && [[ "$FORCE" != "true" ]]; then
+        skip "workspace.yaml"
+    else
+        cp "$TEMPLATES/workspace.example.yaml" "$ROOT/workspace.yaml"
+        ok "workspace.yaml (edit me: list your repos)"
+    fi
+
+    # 3. Per-repo install for every repo declared in the manifest.
+    force_args=()
+    [[ "$FORCE" == "true" ]] && force_args=(--force)
+    printf "\n  Member repos:\n"
+    while IFS= read -r repo_path; do
+        [[ -z "$repo_path" ]] && continue
+        if [[ ! -d "$repo_path" ]]; then
+            printf "  ${YELLOW}~${NC} %s (path not found — skipped)\n" "$repo_path"
+            continue
+        fi
+        printf "\n  → installing into %s\n" "$repo_path"
+        AW_NONINTERACTIVE=1 bash "$SELF" "${force_args[@]}" "$repo_path"
+    done < <(python3 - "$ROOT/workspace.yaml" "$ROOT" <<'PY'
+import os, sys, yaml
+manifest, root = sys.argv[1], sys.argv[2]
+try:
+    data = yaml.safe_load(open(manifest)) or {}
+except Exception:
+    sys.exit(0)
+for r in data.get("repos", []) or []:
+    p = r.get("path") or r.get("name")
+    if not p:
+        continue
+    print(p if os.path.isabs(p) else os.path.normpath(os.path.join(root, p)))
+PY
+)
+    printf "\n${GREEN}Workspace install done.${NC}\n"
+    echo "Next: edit $ROOT/workspace.yaml, then run from $ROOT:"
+    echo "  scripts/aw-workspace status"
+    echo "  scripts/aw-workspace plan"
+    [[ -n "$CLONED_DIR" ]] && rm -rf "$CLONED_DIR"
+    exit 0
+fi
+
 # ── Prompt for project name ───────────────────────────────────────────────────
 PROJ_NAME="$(basename "$TARGET")"
-printf "\nProject name [%s]: " "$PROJ_NAME"
-read -r input
-PROJ_NAME="${input:-$PROJ_NAME}"
+# Workspace mode re-execs this script per repo non-interactively; skip the prompt.
+if [[ "${AW_NONINTERACTIVE:-}" != "1" ]]; then
+    printf "\nProject name [%s]: " "$PROJ_NAME"
+    read -r input
+    PROJ_NAME="${input:-$PROJ_NAME}"
+fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 printf "\nInstalling agent-workflow into: %s\n\n" "$TARGET"
@@ -149,7 +213,7 @@ fi
 # Scripts for the master loop + gotchas index
 printf "\n  Scripts:\n"
 for s in aw-run aw-configure.py aw-run-all.sh aw-run-tests.sh aw-decide.sh gotchas-index.sh \
-         update-codebase-summary.sh aw-inspect aw-ci-preflight.sh; do
+         update-codebase-summary.sh aw-inspect aw-ci-preflight.sh aw-workspace; do
     if [[ -f "$SCRIPTS_SRC/$s" ]]; then
         copy_file "$SCRIPTS_SRC/$s" "$TARGET/scripts/$s"
         chmod +x "$TARGET/scripts/$s"

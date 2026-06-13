@@ -1121,6 +1121,117 @@ class TestSingleAgentMode(RegressionTest):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SUITE 8 — Multi-repo workspace
+# ══════════════════════════════════════════════════════════════════════════════
+class TestWorkspace(RegressionTest):
+    """Verify the multi-repo workspace layer: manifest template, the aw-workspace
+    orchestrator, and the single-progress.yaml epic discovery in aw-run-all.sh."""
+
+    def test_workspace_template_exists_and_parses(self):
+        import yaml as _yaml
+        tmpl = ROOT / "templates" / "workspace.example.yaml"
+        self.assertTrue(tmpl.exists(), "templates/workspace.example.yaml missing")
+        data = _yaml.safe_load(tmpl.read_text())
+        self.assertHas(
+            data, "repos",
+            breakage="workspace.example.yaml has no 'repos' list — aw-workspace has nothing to drive",
+            fix="Restore the repos: list in templates/workspace.example.yaml",
+        )
+        self.assertTrue(isinstance(data["repos"], list) and data["repos"],
+                        "workspace.example.yaml 'repos' must be a non-empty list")
+
+    def test_aw_workspace_exists_and_is_executable(self):
+        script = ROOT / "scripts" / "aw-workspace"
+        self.assertTrue(script.exists(), "scripts/aw-workspace missing")
+        self.assertTrue(os.access(script, os.X_OK), "scripts/aw-workspace is not executable")
+
+    def _make_repo(self, tmp, epics_yaml):
+        """Create a git repo dir with a single progress.yaml under tmp."""
+        repo = pathlib.Path(tmp) / "repo-a"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        (repo / "progress.yaml").write_text(epics_yaml)
+        return repo
+
+    def test_aw_run_all_reads_single_progress_yaml(self):
+        """aw-run-all.sh --dry-run must list a planned epic from a plain progress.yaml
+        and must exclude a 'done' epic (done == complete)."""
+        epics = textwrap.dedent("""\
+            project: repo-a
+            epics:
+              - id: WS-PLANNED
+                title: open epic
+                status: planned
+              - id: WS-DONE
+                title: finished epic
+                status: done
+        """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._make_repo(tmp, epics)
+            r = run(["bash", str(ROOT / "scripts" / "aw-run-all.sh"), "--dry-run"], cwd=repo)
+        self.assertEqual(r.returncode, 0, f"aw-run-all --dry-run failed:\n{r.stdout}\n{r.stderr}")
+        self.assertIn(
+            "WS-PLANNED", r.stdout,
+            "aw-run-all.sh did not discover a planned epic from a single progress.yaml\n"
+            "Check load_epics() loads progress.yaml in scripts/aw-run-all.sh",
+        )
+        self.assertNotIn(
+            "WS-DONE", r.stdout,
+            "aw-run-all.sh included a 'done' epic in the plan — done must map to complete\n"
+            "Check norm_status() in scripts/aw-run-all.sh",
+        )
+
+    def test_aw_configure_treats_done_as_complete(self):
+        """aw-configure.py must auto-skip implement for a 'done' epic in progress.yaml."""
+        epics = textwrap.dedent("""\
+            project: repo-a
+            epics:
+              - id: WS-DONE
+                title: finished epic
+                status: done
+        """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._make_repo(tmp, epics)
+            r = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "aw-configure.py"), "WS-DONE", "default", "[]"],
+                cwd=repo, capture_output=True, text=True,
+            )
+        out = json.loads(r.stdout.strip()) if r.stdout.strip() else {}
+        self.assertEqual(
+            out.get("skip_implement"), "true",
+            "aw-configure.py did not auto-skip implement for a 'done' epic\n"
+            "Check normalize_status() in scripts/aw-configure.py maps done->complete",
+        )
+
+    def test_aw_workspace_status_counts_done(self):
+        """aw-workspace status must run against a manifest and count a 'done' epic."""
+        epics = textwrap.dedent("""\
+            project: repo-a
+            epics:
+              - id: WS-DONE
+                title: finished epic
+                status: done
+        """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._make_repo(tmp, epics)
+            manifest = pathlib.Path(tmp) / "workspace.yaml"
+            manifest.write_text(textwrap.dedent(f"""\
+                version: 1
+                workspace: t
+                repos:
+                  - name: repo-a
+                    path: {repo}
+                    progress: progress.yaml
+                    base_branch: main
+                    order: 10
+            """))
+            r = run(["bash", str(ROOT / "scripts" / "aw-workspace"),
+                     "-w", str(manifest), "status"], cwd=tmp)
+        self.assertEqual(r.returncode, 0, f"aw-workspace status failed:\n{r.stdout}\n{r.stderr}")
+        self.assertIn("repo-a", r.stdout, "aw-workspace status did not list the repo")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Runner
 # ══════════════════════════════════════════════════════════════════════════════
 SUITES = {
@@ -1129,6 +1240,7 @@ SUITES = {
     "providers":    [TestMultiProviderContract],
     "single-agent": [TestSingleAgentMode],
     "scripts":      [TestOurScripts],
+    "workspace":    [TestWorkspace],
 }
 
 

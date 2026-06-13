@@ -1,0 +1,58 @@
+# workspace.yaml — multi-repo agent-workflow manifest.
+#
+# Place this file at the workspace root: the directory whose immediate
+# children are the member git repos. `scripts/aw-workspace` reads it to drive
+# the per-repo Archon master-loop (scripts/aw-run-all.sh / scripts/aw-run)
+# across every repo, one repo at a time.
+#
+# Copy to `workspace.yaml` and edit. Re-running the installer never overwrites
+# a workspace.yaml you have already customised.
+#
+# ── Conventions ─────────────────────────────────────────────────────────────
+# Each repo keeps its OWN progress file and its OWN copy of the agent-workflow
+# scripts (install agent-workflow into each repo). aw-workspace does not own
+# epic state — it only sequences the per-repo runs and aggregates their logs.
+#
+# Execution model (this version): per-repo independent, sequential. Repos run
+# in ascending `order`; ties run in listed order. There is no cross-repo
+# dependency graph — order is the only lever.
+# ────────────────────────────────────────────────────────────────────────────
+
+version: 1
+workspace: general-scraper
+
+# Default model triple, forwarded to each repo's aw-run as
+# --coder/--tester/--master. Per-repo overrides win (see archive-core below).
+defaults:
+  coder:  pi:github-copilot/claude-sonnet-4.6
+  tester: pi:github-copilot/gpt-5.3-codex
+  master: pi:github-copilot/gpt-5.2
+
+repos:
+  - name: yt-auto-scraper
+    path: yt-auto-scraper          # relative to this file's directory (absolute also allowed)
+    progress: progress.yaml        # epic source for `aw-workspace status`
+    base_branch: main              # passed to aw-run-all --base-branch
+    order: 10
+
+  - name: stealth-web-crawler
+    path: stealth-web-crawler
+    progress: progress.yaml
+    base_branch: main
+    order: 10
+
+  - name: telegram-scraper
+    path: telegram-scraper
+    progress: progress.yaml
+    base_branch: main
+    order: 10
+
+  - name: general-scraper-archive-core
+    path: general-scraper-archive-core
+    progress: progress.yaml
+    base_branch: main
+    order: 99                      # the manager: run last, it consumes the scrapers
+    # Per-repo model overrides are optional and merge over `defaults`:
+    # coder:  claude:sonnet
+    # tester: codex:gpt-5.3-codex
+    # master: claude:opus

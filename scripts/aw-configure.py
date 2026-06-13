@@ -37,44 +37,50 @@ import json
 import pathlib
 import sys
 
+# Progress files searched, in order. The single progress.yaml is the common
+# case across the scraper repos; scoped files cover split backend/frontend repos.
+PROGRESS_FILES = ["progress.yaml", "progress.backend.yaml", "progress.frontend.yaml"]
 
-def get_epic_status(root: pathlib.Path, epic_id: str) -> str:
-    """Read the current status of an epic from progress.*.yaml files."""
+
+def normalize_status(s: str) -> str:
+    """Map the single-progress.yaml vocab onto the canonical workflow vocab.
+
+    Repos using one progress.yaml say `done`; the workflow says `complete`.
+    Treat them as equivalent so auto-skip detection works for both.
+    """
+    return "complete" if s == "done" else s
+
+
+def _find_epic(root: pathlib.Path, epic_id: str) -> dict:
+    """Return the epic dict from the first progress file that defines it, or {}."""
     try:
         import yaml  # type: ignore[import-untyped]
     except ImportError:
-        return ""
-    for fname in ["progress.backend.yaml", "progress.frontend.yaml"]:
+        return {}
+    for fname in PROGRESS_FILES:
         try:
             data = yaml.safe_load((root / fname).read_text())
+            if not isinstance(data, dict):
+                continue
             key = next((k for k in data if "epics" in k or k == "epics"), None)
             if not key:
                 continue
             for ep in data[key]:
                 if ep["id"] == epic_id:
-                    return ep.get("status", "")
+                    return ep
         except Exception:
             pass
-    return ""
+    return {}
+
+
+def get_epic_status(root: pathlib.Path, epic_id: str) -> str:
+    """Read the current (normalized) status of an epic from progress.*.yaml files."""
+    return normalize_status(_find_epic(root, epic_id).get("status", ""))
+
 
 def get_epic_agent_mode(root: pathlib.Path, epic_id: str) -> str:
     """Read agent_mode from the epic entry ('split' or 'single'; default 'split')."""
-    try:
-        import yaml  # type: ignore[import-untyped]
-    except ImportError:
-        return "split"
-    for fname in ["progress.backend.yaml", "progress.frontend.yaml"]:
-        try:
-            data = yaml.safe_load((root / fname).read_text())
-            key = next((k for k in data if "epics" in k or k == "epics"), None)
-            if not key:
-                continue
-            for ep in data[key]:
-                if ep["id"] == epic_id:
-                    return ep.get("agent_mode", "split")
-        except Exception:
-            pass
-    return "split"
+    return _find_epic(root, epic_id).get("agent_mode", "split")
 
 
 def all_tests_exist(root: pathlib.Path, tests_paths_json: str) -> bool:

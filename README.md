@@ -24,6 +24,36 @@ Safe to re-run — never overwrites files you have already customised.
 
 ---
 
+## Drive many repos from one place (workspaces)
+
+When several repos live side by side and you want one command to run the loop
+across all of them, install in **workspace mode** from the directory whose
+children are the repos:
+
+```bash
+git clone --depth=1 https://github.com/Elvis-codeur/agent-workflow.git /tmp/aw
+bash /tmp/aw/install.sh --workspace .
+rm -rf /tmp/aw
+```
+
+This scaffolds a `workspace.yaml` manifest + `scripts/aw-workspace` at the root,
+then installs the full toolchain into each repo the manifest lists. Then:
+
+```bash
+scripts/aw-workspace status      # epic-count table across all repos (no Archon needed)
+scripts/aw-workspace plan        # run order + open epics per repo
+scripts/aw-workspace run         # run the loop across every repo, sequentially
+scripts/aw-workspace run --repo myrepo --only BE-31   # one epic, one repo
+```
+
+Repos run sequentially in ascending `order`; each delegates to its own
+`scripts/aw-run-all.sh`, so worktrees, the DAG, and merges are unchanged.
+Each repo keeps its own `progress.yaml` — a single `progress.yaml` (with `done`)
+and scoped `progress.backend.yaml`/`progress.frontend.yaml` (with `complete`)
+are both accepted. Full guide: `docs/multi-repo-workspace.md`.
+
+---
+
 ## What gets installed
 
 ```
