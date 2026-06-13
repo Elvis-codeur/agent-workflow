@@ -723,6 +723,27 @@ class TestOurScripts(RegressionTest):
             "aw-run accepted a slashed deepseek model — check_model() must reject it",
         )
 
+    def test_aw_run_kimi_expands_to_pi(self):
+        """kimi:<model> must be accepted and rendered as provider=pi model=moonshotai/<model>."""
+        r = run(
+            ["bash", "scripts/aw-run", "--coder", "kimi:kimi-k2-thinking", "--dry-run", "X"],
+            cwd=ROOT,
+        )
+        self.assertEqual(r.returncode, 0, f"aw-run rejected kimi:kimi-k2-thinking\n{r.stderr[:300]}")
+        self.assertIn(
+            "pi / moonshotai/kimi-k2-thinking", r.stdout,
+            "kimi: shorthand did not expand to provider=pi model=moonshotai/<model>\n"
+            "Check expand_pi_alias() in scripts/aw-run",
+        )
+
+    def test_aw_run_rejects_bare_kimi(self):
+        """kimi: with an empty model must be rejected."""
+        r = run(["bash", "scripts/aw-run", "--coder", "kimi:", "--dry-run", "X"], cwd=ROOT)
+        self.assertNotEqual(
+            r.returncode, 0,
+            "aw-run accepted an empty kimi model — check_model() must reject it",
+        )
+
     def test_aw_run_all_dry_run(self):
         script = ROOT / "scripts" / "aw-run-all.sh"
         if not script.exists():
