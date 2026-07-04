@@ -42,6 +42,33 @@ acceptance bullets one by one.
 
 ---
 
+## Gotchas found after an epic is already complete
+
+A gotcha isn't only found while a coder/tester is actively working an
+epic. It's often found later — via a live/production run against a real
+external dependency (see the live-verification step in
+`implement-and-test`/`test-and-progress`), or while working a *different*,
+later epic that happens to touch the same code.
+
+When this happens:
+
+1. Fix the bug and add a regression test, in the **originating epic's**
+   `tests.paths` (the epic whose code the bug was actually in), even
+   though that epic finished long ago.
+2. Write the gotcha doc exactly as normal — Path A or B below — and
+   append it to the **originating epic's** existing `gotchas:` list.
+3. **Do not reopen the epic.** Leave `status: complete` as-is. The bug
+   was not in that epic's `implementation.acceptance` — that is
+   precisely why it's a gotcha and not a reopened epic. Moving `status`
+   back to `in_progress`/`blocked` would misrepresent an epic that was
+   correctly complete against its own contract.
+4. Commit the fix as a normal `fix(<area>): <description>` commit citing
+   the `GOTCHA-NNN` id in the body — not a
+   `chore(progress): mark <EPIC-ID> ...` status-change commit, since the
+   epic's status isn't changing.
+
+---
+
 ## Two paths
 
 ### Path A — inline-only (fits in ≤ 5 lines)

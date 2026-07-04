@@ -176,6 +176,37 @@ before proceeding.
 
 ---
 
+## Step 5a — Live verification (integration epics only)
+
+Skip this step entirely if `implementation.paths` has no client/connector
+for a real external system (a third-party API, a paid service, a queue,
+etc.) — most epics don't need it.
+
+When it does: mocked tests passing is necessary but not sufficient. Mocked
+fixtures encode what you *expect* the wire format to look like; they don't
+naturally produce the shapes real responses actually contain — a field
+sent as explicit JSON `null` where you assumed a key would simply be
+absent, a value that blows past a column width you picked for "normal"
+data, a status code your retry logic didn't anticipate. Before marking
+`complete`, run the smallest real exercise of the new code against the
+actual live dependency (not mocks) that still exercises the real wire
+format — a handful of real records is enough, this is a smoke check, not
+a load test.
+
+If it surfaces a bug not covered by `tests.acceptance` or
+`implementation.acceptance`: this is still same-epic work if the epic
+hasn't shipped yet — fix it now, same session. (`/record-gotcha`'s
+post-completion path is for when this live check happens well after the
+epic already shipped, e.g. a scheduled run days later turns up something
+new.)
+
+If no live dependency is reachable in this environment (offline, no
+credentials), say so explicitly in the `review:` note rather than
+skipping silently — don't let "I couldn't test this for real" disappear
+from the record.
+
+---
+
 ## Step 6 — Commit
 
 Stage and commit implementation and test files together in one commit:

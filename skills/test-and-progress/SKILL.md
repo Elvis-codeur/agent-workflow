@@ -211,6 +211,30 @@ For each epic, record:
 - xfail count when relevant
 - the first concrete blocking reason when the suite cannot run
 
+### Step 5 — Live verification (integration epics only), before marking `complete`
+
+Skip entirely if the epic's `implementation.paths` has no client/connector
+for a real external system (a third-party API, a paid service, a queue,
+etc.).
+
+When it does: a green mocked suite is necessary but not sufficient before
+promoting to `complete`. Mocked fixtures encode what you *expect* the wire
+format to look like, not what it actually contains — a field sent as
+explicit JSON `null` where a key is normally just absent, a value that
+exceeds a column width picked for "normal" data, an unanticipated status
+code. Run the smallest real exercise of the new code against the actual
+live dependency (not mocks) — a handful of real records is enough.
+
+If it surfaces a bug not covered by `implementation.acceptance`/
+`tests.acceptance`, treat it exactly like any other tester-found gap: send
+it back (`status: blocked` with a concrete note, or straight to
+`/record-gotcha` if it's clearly off-epic scope) rather than marking
+`complete` with a known unverified edge case.
+
+If no live dependency is reachable in this environment (offline, no
+credentials), say so explicitly in the `review:` note rather than
+promoting to `complete` on mocked-only confidence.
+
 ## How to update the progress file
 
 ### Which file to update
