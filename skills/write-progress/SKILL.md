@@ -251,27 +251,66 @@ acceptance:
 
 ---
 
+## Agent modes
+
+Every epic should declare how it will be worked. Add `agent_mode` to the epic:
+
+```yaml
+agent_mode: single   # one agent handles tests + implementation (TDD approach)
+agent_mode: split    # default; separate coder-agent and tester-agent sessions
+```
+
+If `agent_mode` is omitted, `split` is assumed.
+
+**`split` mode** (default, two sessions):
+- coder-agent runs `/implement-epic` → marks `review`
+- tester-agent runs `/test-and-progress` → marks `complete`
+- `tests.owner: tester-agent`, `implementation.owner: coder-agent`
+
+**`single` mode** (one session, TDD):
+- One agent runs `/implement-and-test`: writes tests first (red), implements (green), marks `complete`
+- `tests.owner: coder-agent`, `implementation.owner: coder-agent`
+- `review` status is skipped — agent goes directly from `in_progress` to `complete`
+- The `[SINGLE-AGENT-TDD]` note in the progress file is the permanent audit trail
+
+Use `single` when:
+- You are the only model working on the project (no automated tester session)
+- The acceptance criteria are unambiguous and mechanically verifiable
+
+Use `split` when:
+- A second model session is available to independently validate tests
+- The epic is high-risk (auth, payments, data migrations, external APIs)
+
+---
+
 ## Status lifecycle
 
+**Split mode:**
 ```
 planned → in_progress → review → complete
+                     ↘ blocked → in_progress (after fix)
+```
+
+**Single mode (TDD):**
+```
+planned → in_progress → complete
                      ↘ blocked → in_progress (after fix)
 ```
 
 | Status | Set by | Meaning |
 |---|---|---|
 | `planned` | progress-file author | Not started; preconditions not met or not yet assigned. |
-| `in_progress` | coder-agent (on start) | Claimed and being implemented. |
-| `review` | coder-agent (after commit) or tester-agent (after green run) | Implementation committed; awaiting tester-agent validation. |
-| `complete` | tester-agent | All acceptance criteria met; test suite green; CI green. |
-| `blocked` | coder-agent or tester-agent | Cannot proceed; reason in `blocked:` note. |
+| `in_progress` | any agent (on start) | Claimed; tests being written or implementation underway. |
+| `review` | coder-agent (**split only**) | Implementation committed; awaiting tester-agent validation. |
+| `complete` | tester-agent (split) or same agent (single) | All criteria met; tests green; CI green. |
+| `blocked` | any agent | Cannot proceed; reason in `blocked:` note. |
 
 Rules:
-- Only the tester-agent marks `complete`. The coder-agent marks `review`.
+- **Split mode:** only the tester-agent marks `complete`. The coder-agent marks `review`.
+- **Single mode:** the same agent marks `complete` directly. `review` is never used.
+- A `blocked` epic must always have a `blocked:` note. "blocked" without a note is forbidden.
 - Do not use `in_progress` for both tracks simultaneously on the same epic
   unless the plan explicitly notes parallel-track work.
-- A `blocked` epic must always have a `blocked:` note. "blocked" without a
-  note is forbidden.
 
 ---
 

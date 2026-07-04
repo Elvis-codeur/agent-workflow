@@ -204,6 +204,13 @@ Good `blocked:` notes give the next agent enough to act without
 re-investigating. Include exact error messages, missing identifiers, or
 unmet dependency names.
 
+**If this epic implements a client/connector for a real external
+system**, the tester-agent will run a live verification pass against the
+real dependency before promoting to `complete` (see
+`/test-and-progress`'s Step 5) — mocked tests passing here is enough to
+reach `review`, but not the final word on correctness. No action needed
+from you here beyond knowing it's coming.
+
 ---
 
 ## Step 7 — Commit the progress file update

@@ -247,6 +247,12 @@ When an agent hits a bug that isn't part of the epic's acceptance criteria
 writes it to `docs/gotchas/`. `scripts/gotchas-index.sh` keeps `INDEX.md`
 in sync. Every agent reads the index at Step 0 so the bug isn't rediscovered.
 
+Not every gotcha turns up mid-epic — connector/integration epics get a
+live-verification pass against their real external dependency before
+`complete` (see `implement-and-test`/`test-and-progress`), and that's
+often where the real surprises show up. A gotcha found there is recorded
+the same way, without reopening the epic it belongs to.
+
 Three gotchas are pre-loaded from building this workflow:
 
 | ID | What it prevents |

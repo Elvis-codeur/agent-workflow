@@ -1,30 +1,69 @@
 ---
 name: fix-blocked
-description: Coder-agent workflow for resolving a blocked epic — read the blocked note from the progress file, fix the implementation narrowly, re-run gates, and return the epic to review.
+description: Resolve a blocked epic — read the blocked note, fix the implementation narrowly (split mode) or fix code and/or tests (single-agent mode), re-run gates, and mark complete or return to review.
 ---
 
 # `/fix-blocked` — Resolve a blocked epic
 
-Use this skill when:
+Use this skill when an epic has `status: blocked` in a progress file
+and you need to unblock it.
 
-- An epic has `status: blocked` in `progress.frontend.yaml` or
-  `progress.backend.yaml`.
-- The `blocked:` note was written by the tester-agent after running tests.
-- Your job is to fix the implementation so the tests pass.
+**The procedure differs by `agent_mode`. Read that field first.**
+
+---
+
+## Single-agent mode (`agent_mode: single`)
+
+You wrote both the tests and the implementation. Being blocked means one of:
+1. **Code bug** — your implementation doesn't satisfy what the tests assert.
+2. **Test bug** — your tests assert something the spec does not require, or
+   use an assumption that is no longer correct.
+3. **Environment / dependency** — toolchain, missing package, env var.
+
+You may fix both code **and** tests — with one constraint:
+**tests must express the spec, not the implementation.**
+
+Before touching any file, open the spec section for the epic's `area:` and
+the original `tests.acceptance` bullets. If the test is asserting something
+that contradicts the spec or goes beyond it, fix the test. If the test
+correctly states the spec and the code is wrong, fix the code. Document which
+it was in the review note.
+
+After fixing, re-run gates and mark `complete` (not `review`):
+```yaml
+status: complete
+review: >
+  [SINGLE-AGENT-TDD] Fixed YYYY-MM-DD. <what was wrong: code bug / test bug / env>.
+  <what was changed and why it aligns with the spec>.
+  All N tests green. Gates clean.
+```
+
+---
+
+## Split mode (`agent_mode: split`, default)
 
 This skill is the **coder-agent's response to tester-agent feedback**. It is
 narrower than `/implement-epic` — you are not building from scratch, you are
 fixing a specific reported failure.
 
-## When NOT to use this skill
+### When NOT to use this skill (split mode)
 
-- The epic is `planned` or `in_progress` and has never been attempted — use
-  `/implement-epic` instead.
-- The `blocked:` note says a *dependency* is missing (another epic not
-  complete, an env package missing, a config problem) — those are not code
-  fixes; resolve the dependency first.
-- The tester-agent has not written a `blocked:` note yet — wait for the
-  tester-agent to run the tests and report before touching the code.
+- The epic is `planned` or `in_progress` and never been attempted — use `/implement-epic`.
+- The `blocked:` note says a *dependency* is missing — resolve the dependency first.
+- The tester-agent has not written a `blocked:` note yet — wait for them.
+
+### Role boundary (split mode)
+
+| You do | You do not do |
+|---|---|
+| Fix implementation files in `implementation.paths` | Edit test files in `tests.paths` |
+| Fix only what the `blocked:` note describes | Refactor or improve surrounding code |
+| Re-run gates | Rewrite tests to pass against broken code |
+| Update epic to `review` | Mark the epic `complete` |
+
+**If a test appears wrong** (asserting behavior the spec does not require),
+do NOT edit the test. Record the discrepancy in the `blocked:` note and flag
+it. The tester-agent is responsible for correcting wrong tests in split mode.
 
 ---
 
@@ -210,7 +249,7 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 
 ## Step 6 — Update the progress file
 
-Replace the `blocked:` note with a `review:` note:
+**Split mode** — replace the `blocked:` note with a `review:` note:
 
 ```yaml
 status: review
@@ -218,6 +257,19 @@ review: >
   Fixed YYYY-MM-DD. <EPIC-ID>: <short description of the fix>.
   Gate: <linter> clean, <type-checker> clean, N/N tests pass in
   path/to/test_file.py. Previously blocked: <one line from the old note>.
+```
+
+Remove the old `blocked:` field entirely. The tester-agent will re-run
+the suite and confirm `complete` or return to `blocked`.
+
+**Single mode** — replace the `blocked:` note with `complete`:
+
+```yaml
+status: complete
+review: >
+  [SINGLE-AGENT-TDD] Fixed YYYY-MM-DD. <what was wrong: code bug / test bug / env>.
+  <what was changed and why it aligns with the spec>.
+  All N tests green. Gates clean. Previously blocked: <one line from old note>.
 ```
 
 Remove the old `blocked:` field entirely. Leave all other fields unchanged.
@@ -228,38 +280,47 @@ Remove the old `blocked:` field entirely. Leave all other fields unchanged.
 
 ```bash
 git add progress.frontend.yaml   # or progress.backend.yaml
+# Split mode:
 git commit -m "chore(progress): mark <EPIC-ID> review after fix"
+# Single mode:
+git commit -m "chore(progress): mark <EPIC-ID> complete after fix [single-agent-tdd]"
 ```
-
-The tester-agent will re-run the suite and confirm `complete` or return
-the epic to `blocked` if new failures are found.
 
 ---
 
 ## Avoiding common mistakes
 
-| Mistake | Correct approach |
-|---|---|
-| Editing tests to match broken code | Fix the code; flag spec ambiguity if needed |
-| Fixing beyond the `blocked:` note's scope | Narrow the diff; scope creep hides regressions |
-| Marking `complete` | Only the tester-agent marks complete |
-| Committing with a failing test | Fix the regression before committing |
-| Guessing when the note is vague | Re-run tests via `/test-and-progress` Mode B to get a precise note first |
-| Using `--no-verify` | Fix the hook failure in the code |
+| Mistake | Mode | Correct approach |
+|---|---|---|
+| Editing tests to make broken code pass | Split | Fix the code; flag spec ambiguity instead |
+| Editing tests without checking the spec | Single | Always check spec before changing a test |
+| Fixing beyond the `blocked:` note's scope | Both | Narrow the diff; scope creep hides regressions |
+| Marking `complete` directly | Split | Only the tester-agent marks complete in split mode |
+| Marking `review` | Single | Single-agent skips review; go directly to `complete` |
+| Committing with a failing test | Both | Fix the regression before committing |
+| Using `--no-verify` | Both | Fix the hook failure in the code |
 
 ---
 
 ## Checklist
 
+**Split mode:**
 - [ ] Read the `blocked:` note completely
-- [ ] Confirmed it is a code bug (not a dependency, env, or test-spec mismatch)
-- [ ] Reproduced the failure before changing anything
-- [ ] Fixed only what the note describes
-- [ ] Full test suite green (or legitimately xfail)
-- [ ] Lint and type-check green
+- [ ] Confirmed it is a code bug (not dependency or test-spec mismatch)
+- [ ] Reproduced failure before changing anything
+- [ ] Fixed only what the note describes; no `tests.paths` files touched
+- [ ] Full suite green; lint and type-check green
 - [ ] Committed with `fix(<scope>): <EPIC-ID> ...` message
-- [ ] Progress file updated to `status: review` with concrete note
-- [ ] Progress file commit pushed
+- [ ] Progress updated to `status: review`
+
+**Single mode:**
+- [ ] Read the `blocked:` note; determined whether code bug or test bug
+- [ ] Checked spec to validate the fix direction
+- [ ] Reproduced failure before changing anything
+- [ ] Fixed code and/or tests; all changes align with spec
+- [ ] Full suite green; lint and type-check green
+- [ ] Committed with `fix(<scope>): <EPIC-ID> ... [single-agent-tdd]` message
+- [ ] Progress updated to `status: complete` with `[SINGLE-AGENT-TDD]` note
 
 ---
 

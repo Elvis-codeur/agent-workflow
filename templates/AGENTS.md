@@ -128,6 +128,13 @@ lines); anything bigger gets a long-form `docs/gotchas/GOTCHA-NNN-*.md`
 with reproduction conditions, indexed automatically by
 `scripts/gotchas-index.sh` (runs in the pre-commit hook).
 
+Gotchas also surface after an epic is already `complete` — typically via
+a live-verification run against a real external dependency (see
+`/implement-and-test` and `/test-and-progress`) well after the epic
+shipped. Same recording process applies; the epic's `status` stays
+`complete` (see `/record-gotcha`'s "Gotchas found after an epic is
+already complete" section).
+
 ## What NOT to do
 
 - Don't bypass pre-commit hooks with `--no-verify`. Fix the issue.
