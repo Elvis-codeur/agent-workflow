@@ -2,9 +2,12 @@
 # install.sh — inject the agent-workflow boilerplate into a target project.
 #
 # Usage:
-#   ./install.sh                    # installs into the current directory
-#   ./install.sh /path/to/project   # installs into the specified directory
-#   ./install.sh --force .          # overwrites files that already exist
+#   ./install.sh                      # installs into the current directory
+#   ./install.sh /path/to/project     # installs into the specified directory
+#   ./install.sh --force .            # overwrites files that already exist
+#   ./install.sh --workspace /path    # multi-repo mode: scaffold workspace.yaml
+#                                     # + scripts/aw-workspace at /path, then
+#                                     # install into each repo it lists
 #
 # Safe to re-run: existing files are not overwritten unless --force is passed.
 
@@ -34,17 +37,22 @@ SCRIPTS_SRC="$SCRIPT_DIR/scripts"
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 FORCE=false
+WORKSPACE=false
 TARGET=""
 
 for arg in "$@"; do
     case "$arg" in
-        --force) FORCE=true ;;
+        --force)     FORCE=true ;;
+        --workspace) WORKSPACE=true ;;
         *) TARGET="$arg" ;;
     esac
 done
 
 TARGET="${TARGET:-.}"
 TARGET="$(cd "$TARGET" && pwd)"
+
+# Absolute path to this installer, so workspace mode can re-exec it per repo.
+SELF="$SCRIPT_DIR/install.sh"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
@@ -95,11 +103,67 @@ make_symlink() {
     fi
 }
 
+# ── Workspace mode ────────────────────────────────────────────────────────────
+# Scaffold the orchestrator + manifest at the workspace root, then run the
+# normal single-repo install into each repo declared in the manifest.
+if [[ "$WORKSPACE" == "true" ]]; then
+    ROOT="$TARGET"
+    printf "\nInstalling agent-workflow WORKSPACE into: %s\n\n" "$ROOT"
+
+    # 1. Orchestrator script at the root.
+    copy_file "$SCRIPTS_SRC/aw-workspace" "$ROOT/scripts/aw-workspace"
+    chmod +x "$ROOT/scripts/aw-workspace"
+
+    # 2. Manifest — scaffold from template; never clobber a customised one.
+    if [[ -f "$ROOT/workspace.yaml" ]] && [[ "$FORCE" != "true" ]]; then
+        skip "workspace.yaml"
+    else
+        cp "$TEMPLATES/workspace.example.yaml" "$ROOT/workspace.yaml"
+        ok "workspace.yaml (edit me: list your repos)"
+    fi
+
+    # 3. Per-repo install for every repo declared in the manifest.
+    force_args=()
+    [[ "$FORCE" == "true" ]] && force_args=(--force)
+    printf "\n  Member repos:\n"
+    while IFS= read -r repo_path; do
+        [[ -z "$repo_path" ]] && continue
+        if [[ ! -d "$repo_path" ]]; then
+            printf "  ${YELLOW}~${NC} %s (path not found — skipped)\n" "$repo_path"
+            continue
+        fi
+        printf "\n  → installing into %s\n" "$repo_path"
+        AW_NONINTERACTIVE=1 bash "$SELF" "${force_args[@]}" "$repo_path"
+    done < <(python3 - "$ROOT/workspace.yaml" "$ROOT" <<'PY'
+import os, sys, yaml
+manifest, root = sys.argv[1], sys.argv[2]
+try:
+    data = yaml.safe_load(open(manifest)) or {}
+except Exception:
+    sys.exit(0)
+for r in data.get("repos", []) or []:
+    p = r.get("path") or r.get("name")
+    if not p:
+        continue
+    print(p if os.path.isabs(p) else os.path.normpath(os.path.join(root, p)))
+PY
+)
+    printf "\n${GREEN}Workspace install done.${NC}\n"
+    echo "Next: edit $ROOT/workspace.yaml, then run from $ROOT:"
+    echo "  scripts/aw-workspace status"
+    echo "  scripts/aw-workspace plan"
+    [[ -n "$CLONED_DIR" ]] && rm -rf "$CLONED_DIR"
+    exit 0
+fi
+
 # ── Prompt for project name ───────────────────────────────────────────────────
 PROJ_NAME="$(basename "$TARGET")"
-printf "\nProject name [%s]: " "$PROJ_NAME"
-read -r input
-PROJ_NAME="${input:-$PROJ_NAME}"
+# Workspace mode re-execs this script per repo non-interactively; skip the prompt.
+if [[ "${AW_NONINTERACTIVE:-}" != "1" ]]; then
+    printf "\nProject name [%s]: " "$PROJ_NAME"
+    read -r input
+    PROJ_NAME="${input:-$PROJ_NAME}"
+fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 printf "\nInstalling agent-workflow into: %s\n\n" "$TARGET"
@@ -116,8 +180,17 @@ fi
 # CLAUDE.md
 copy_file "$TEMPLATES/CLAUDE.md" "$TARGET/CLAUDE.md"
 
-# Pre-commit config
-copy_file "$TEMPLATES/.pre-commit-config.yaml" "$TARGET/.pre-commit-config.yaml"
+# Git hooks (.githooks/, activated via core.hooksPath) — the enforced
+# commit-msg + pre-commit gate. Replaces the old .pre-commit-config.yaml.
+printf "\n  Git hooks:\n"
+if [[ -d "$TEMPLATES/.githooks" ]]; then
+    for _hook in "$TEMPLATES/.githooks"/*; do
+        [[ -e "$_hook" ]] || continue
+        copy_file "$_hook" "$TARGET/.githooks/$(basename "$_hook")"
+        chmod +x "$TARGET/.githooks/$(basename "$_hook")"
+    done
+fi
+# commit-msg validator lives in scripts/ (copied with the other scripts below).
 
 # CI workflow
 copy_file "$TEMPLATES/.github/workflows/ci.yml" "$TARGET/.github/workflows/ci.yml"
@@ -149,12 +222,19 @@ fi
 # Scripts for the master loop + gotchas index
 printf "\n  Scripts:\n"
 for s in aw-run aw-configure.py aw-run-all.sh aw-run-tests.sh aw-decide.sh gotchas-index.sh \
-         update-codebase-summary.sh aw-inspect aw-ci-preflight.sh; do
+         update-codebase-summary.sh aw-inspect aw-ci-preflight.sh aw-workspace \
+         validate_commit_msg.py; do
     if [[ -f "$SCRIPTS_SRC/$s" ]]; then
         copy_file "$SCRIPTS_SRC/$s" "$TARGET/scripts/$s"
         chmod +x "$TARGET/scripts/$s"
     fi
 done
+
+# Activate the versioned hooks for this clone (idempotent).
+if [[ -d "$TARGET/.git" ]] && [[ -d "$TARGET/.githooks" ]]; then
+    git -C "$TARGET" config core.hooksPath .githooks
+    ok "git config core.hooksPath .githooks"
+fi
 
 # Symlinks
 printf "\n  Symlinks:\n"
@@ -193,11 +273,12 @@ Next steps:
        → Document each rule in docs/agent-rules/architecture-invariants.md
 
   3. Uncomment the language tracks you use:
-       → .pre-commit-config.yaml  (Python / TypeScript / Rust sections)
+       → .githooks/pre-commit    (ruff / biome / cargo fmt sections)
        → .github/workflows/ci.yml (python / frontend / rust jobs)
 
-  4. Install pre-commit hooks (once, in your project):
-       pre-commit install --install-hooks
+  4. Git hooks are already active (core.hooksPath = .githooks):
+       → commit-msg  runs scripts/validate_commit_msg.py
+       → pre-commit  runs scripts/check-invariants.sh (+ your linters)
 
   5. Write your first progress file:
        → Use /write-progress or follow docs/agent-rules/skills/write-progress/SKILL.md
@@ -210,6 +291,14 @@ Next steps:
                autocommit ON, worktree cleanup ON.
      Requires `archon` v0.3.10+ in PATH (https://github.com/coleam00/Archon).
 EOF
+
+# ── Archon CLI preflight ──────────────────────────────────────────────────────
+# The loop runs ON Archon; the bundled /archon skill is only a helper. Warn (do
+# not fail) if the CLI is missing so the operator installs it before running.
+if ! command -v archon &>/dev/null; then
+    printf "\n${YELLOW}⚠  Archon CLI not found in PATH.${NC}\n"
+    printf "   The master loop (scripts/aw-run) needs it. Install: https://github.com/coleam00/Archon\n"
+fi
 
 # ── Cleanup temp clone (curl-pipe mode) ──────────────────────────────────────
 if [[ -n "$CLONED_DIR" ]]; then

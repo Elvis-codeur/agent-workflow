@@ -71,6 +71,11 @@ Use `/commit` to draft the message from the diff.
 | Master arbitration (coder ↔ tester tie-break) | `/aw-master-loop` | `docs/agent-rules/skills/aw-master-loop/` |
 | Record an off-epic bug for future agents | `/record-gotcha` | `docs/agent-rules/skills/record-gotcha/` |
 | Lint + test + commit | `/commit` | `docs/agent-rules/skills/commit/` |
+| Run / author Archon workflows + config | `/archon` | `docs/agent-rules/skills/archon/` |
+
+The master loop runs **on** the Archon CLI (≥ v0.3.10) — it must be installed in
+this repo's environment (<https://github.com/coleam00/Archon>). The `/archon`
+skill helps author/drive it but is not a substitute for the binary.
 
 When invoking from Codex / ChatGPT (no skill mechanism): open the SKILL.md
 file directly. Its body is the procedure.

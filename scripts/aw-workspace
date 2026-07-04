@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+# aw-workspace — drive the agent-workflow master-loop across MANY repos from
+# one place. Reads a workspace.yaml manifest (see templates/workspace.example.yaml)
+# and delegates to each repo's own scripts/aw-run-all.sh / scripts/aw-run.
+#
+# Usage:
+#   aw-workspace [-w MANIFEST] <command> [options]
+#
+# Commands:
+#   status                  Print an epic-count table for every repo (read-only,
+#                           no Archon needed).
+#   plan                    Print the run order and the open epics each repo
+#                           would run (no Archon needed).
+#   run [options] [-- ...]  Run the master-loop across repos, sequentially, in
+#                           ascending `order`. Everything after `--` is forwarded
+#                           verbatim to the underlying scripts/aw-run.
+#
+# run options:
+#   --repo NAME             Only run this repo (may be repeated).
+#   --only EPIC             Run a single epic (requires exactly one --repo).
+#   --no-push               Forward --no-push to each repo's aw-run-all.sh.
+#   --continue-on-error     Keep going to the next repo if one fails
+#                           (default: stop at the first failing repo).
+#   --dry-run               Print the per-repo command without running it.
+#
+# Global:
+#   -w, --workspace FILE    Path to the manifest (default: ./workspace.yaml).
+#
+# Model selection comes from the manifest: `defaults` plus optional per-repo
+# `coder`/`tester`/`master` overrides, forwarded to aw-run as --coder/--tester/
+# --master. Override per-invocation by appending flags after `--`.
+#
+# Logs are aggregated under <workspace-root>/.aw-workspace/logs/<repo>/ and a
+# run summary is written to <workspace-root>/.aw-workspace/run-summary.md.
+
+set -euo pipefail
+
+MANIFEST="./workspace.yaml"
+
+# ── Pull the global -w/--workspace flag out of the arg stream first ───────────
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -w|--workspace) MANIFEST="$2"; shift 2 ;;
+    *)              ARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${ARGS[@]:-}"
+
+CMD="${1:-}"; [[ $# -gt 0 ]] && shift || true
+
+if [[ -z "$CMD" || "$CMD" == "-h" || "$CMD" == "--help" ]]; then
+  sed -n '2,46p' "$0"; exit 0
+fi
+
+if [[ ! -f "$MANIFEST" ]]; then
+  echo "error: manifest not found: $MANIFEST" >&2
+  echo "  pass one with -w PATH, or create ./workspace.yaml" >&2
+  echo "  (template: templates/workspace.example.yaml in agent-workflow)" >&2
+  exit 2
+fi
+
+MANIFEST_ABS="$(cd "$(dirname "$MANIFEST")" && pwd)/$(basename "$MANIFEST")"
+ROOT="$(dirname "$MANIFEST_ABS")"
+
+# ── Manifest reader ───────────────────────────────────────────────────────────
+# Emits one TSV row per repo (after applying --repo filter and order sort):
+#   name \t abs_path \t progress \t base_branch \t coder \t tester \t master
+# Extra args are repo-name filters (empty = all).
+repos_tsv() {
+  python3 - "$MANIFEST_ABS" "$ROOT" "$@" <<'PY'
+import os, sys, yaml
+manifest, root = sys.argv[1], sys.argv[2]
+want = set(sys.argv[3:])
+data = yaml.safe_load(open(manifest)) or {}
+defaults = data.get("defaults", {}) or {}
+rows = []
+for r in data.get("repos", []) or []:
+    name = r.get("name") or os.path.basename(str(r.get("path", "")))
+    if want and name not in want:
+        continue
+    path = r.get("path", name)
+    apath = path if os.path.isabs(path) else os.path.normpath(os.path.join(root, path))
+    rows.append({
+        "name": name,
+        "path": apath,
+        "progress": r.get("progress", "progress.yaml"),
+        "base_branch": r.get("base_branch", "main"),
+        "order": r.get("order", 100),
+        "coder":  r.get("coder",  defaults.get("coder",  "")),
+        "tester": r.get("tester", defaults.get("tester", "")),
+        "master": r.get("master", defaults.get("master", "")),
+    })
+rows.sort(key=lambda x: (x["order"], 0))
+for x in rows:
+    print("\t".join(str(x[k]) for k in
+          ("name", "path", "progress", "base_branch", "coder", "tester", "master")))
+PY
+}
+
+# ── status ────────────────────────────────────────────────────────────────────
+cmd_status() {
+  echo "═══════════════════════════════════════════════════════════════════════"
+  printf "  %-32s %4s %5s %5s %5s %5s\n" "repo" "plan" "wip" "blk" "done" "tot"
+  echo "───────────────────────────────────────────────────────────────────────"
+  repos_tsv "$@" | while IFS=$'\t' read -r name path progress _base _c _t _m; do
+    python3 - "$name" "$path/$progress" <<'PY'
+import sys, yaml
+name, pfile = sys.argv[1], sys.argv[2]
+def norm(s): return "complete" if s == "done" else (s or "")
+counts = {"planned":0,"in_progress":0,"blocked":0,"complete":0,"other":0}
+total = 0
+try:
+    data = yaml.safe_load(open(pfile))
+    eps = (data or {}).get("epics", []) if isinstance(data, dict) else []
+    for e in eps:
+        total += 1
+        s = norm(e.get("status"))
+        counts[s if s in counts else "other"] += 1
+    note = ""
+except FileNotFoundError:
+    note = "  (no progress file)"
+except Exception as ex:
+    note = f"  (unreadable: {type(ex).__name__})"
+print(f"  {name:<32} {counts['planned']:>4} {counts['in_progress']:>5} "
+      f"{counts['blocked']:>5} {counts['complete']:>5} {total:>5}{note}")
+PY
+  done
+  echo "═══════════════════════════════════════════════════════════════════════"
+  echo "  plan=planned  wip=in_progress  blk=blocked  done=complete/done  tot=all"
+}
+
+# ── plan ────────────────────────────────────────────────────────────────────--
+cmd_plan() {
+  echo "═══════════════════════════════════════════════════════════════════════"
+  echo "  aw-workspace plan   (manifest: $MANIFEST_ABS)"
+  echo "═══════════════════════════════════════════════════════════════════════"
+  repos_tsv "$@" | while IFS=$'\t' read -r name path progress base coder tester master; do
+    echo ""
+    echo "  ── $name  [base=$base]"
+    echo "     models: coder=$coder  tester=$tester  master=$master"
+    if [[ -x "$path/scripts/aw-run-all.sh" ]]; then
+      ( cd "$path" && scripts/aw-run-all.sh --dry-run 2>&1 ) \
+        | sed -n '/Layer\|Total:/p' | sed 's/^/       /' || true
+    else
+      echo "       (agent-workflow not installed here — open epics:)"
+      python3 - "$path/$progress" <<'PY'
+import sys, yaml
+pfile = sys.argv[1]
+OPEN = {"planned","in_progress","review","blocked"}
+try:
+    data = yaml.safe_load(open(pfile))
+    eps = (data or {}).get("epics", []) if isinstance(data, dict) else []
+    open_eps = [e for e in eps if (e.get("status") or "") in OPEN]
+    if not open_eps:
+        print("       (none)")
+    for e in open_eps:
+        print(f"       {e.get('id','?'):14s} {e.get('status',''):12s} {e.get('title','')}")
+except FileNotFoundError:
+    print("       (no progress file)")
+except Exception as ex:
+    print(f"       (unreadable: {type(ex).__name__})")
+PY
+    fi
+  done
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════════════"
+}
+
+# ── run ────────────────────────────────────────────────────────────────────--
+cmd_run() {
+  local REPO_FILTER=() ONLY="" NO_PUSH=0 CONTINUE=0 DRY=0 PASS=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo)              REPO_FILTER+=("$2"); shift 2 ;;
+      --only)              ONLY="$2"; shift 2 ;;
+      --no-push)           NO_PUSH=1; shift ;;
+      --continue-on-error) CONTINUE=1; shift ;;
+      --dry-run)           DRY=1; shift ;;
+      --)                  shift; PASS=("$@"); break ;;
+      -*)                  echo "unknown run flag: $1" >&2; exit 2 ;;
+      *)                   echo "unexpected run arg: $1" >&2; exit 2 ;;
+    esac
+  done
+
+  if [[ -n "$ONLY" && ${#REPO_FILTER[@]} -ne 1 ]]; then
+    echo "error: --only EPIC requires exactly one --repo NAME" >&2; exit 2
+  fi
+
+  local LOG_ROOT="$ROOT/.aw-workspace/logs"
+  local SUMMARY="$ROOT/.aw-workspace/run-summary.md"
+  mkdir -p "$LOG_ROOT"
+  {
+    echo "# aw-workspace run — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo ""
+    echo "| repo | result | log |"
+    echo "|---|---|---|"
+  } > "$SUMMARY"
+
+  local passed=0 failed=0 failed_repos=()
+
+  while IFS=$'\t' read -r name path progress base coder tester master; do
+    [[ -z "$name" ]] && continue
+    echo ""
+    echo "┌────────────────────────────────────────────────────"
+    echo "│  repo: $name   base=$base"
+    echo "│  path: $path"
+    echo "└────────────────────────────────────────────────────"
+
+    if [[ ! -d "$path/.git" ]]; then
+      echo "  ⚠ not a git repo — skipping"; continue
+    fi
+
+    # Build the per-role model flags from the manifest.
+    local model_flags=()
+    [[ -n "$coder"  ]] && model_flags+=(--coder  "$coder")
+    [[ -n "$tester" ]] && model_flags+=(--tester "$tester")
+    [[ -n "$master" ]] && model_flags+=(--master "$master")
+
+    local log="$LOG_ROOT/$name.log"
+    mkdir -p "$(dirname "$log")"
+    local rc=0
+
+    if [[ -n "$ONLY" ]]; then
+      # Single epic via the repo's aw-run.
+      if [[ ! -x "$path/scripts/aw-run" ]]; then
+        echo "  ⚠ scripts/aw-run not found in $name — install agent-workflow there first"
+        rc=2
+      else
+        local cmd=(scripts/aw-run "${model_flags[@]}" "${PASS[@]}" "$ONLY")
+        echo "  → ( cd $name && ${cmd[*]} )"
+        if [[ "$DRY" -eq 0 ]]; then
+          set +e; ( cd "$path" && "${cmd[@]}" ) 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}; set -e
+        fi
+      fi
+    else
+      # All open epics via the repo's aw-run-all.sh.
+      if [[ ! -x "$path/scripts/aw-run-all.sh" ]]; then
+        echo "  ⚠ scripts/aw-run-all.sh not found in $name — install agent-workflow there first"
+        rc=2
+      else
+        local runall=(scripts/aw-run-all.sh --base-branch "$base")
+        [[ "$NO_PUSH" -eq 1 ]] && runall+=(--no-push)
+        runall+=(-- "${model_flags[@]}" "${PASS[@]}")
+        echo "  → ( cd $name && ${runall[*]} )"
+        if [[ "$DRY" -eq 0 ]]; then
+          set +e; ( cd "$path" && "${runall[@]}" ) 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}; set -e
+        fi
+      fi
+    fi
+
+    if [[ "$DRY" -eq 1 ]]; then
+      echo "| $name | dry-run | — |" >> "$SUMMARY"; continue
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+      echo "  ✓ $name done"
+      passed=$((passed+1))
+      echo "| $name | ✓ pass | $log |" >> "$SUMMARY"
+    else
+      echo "  ✗ $name FAILED (rc=$rc)"
+      failed=$((failed+1)); failed_repos+=("$name")
+      echo "| $name | ✗ fail (rc=$rc) | $log |" >> "$SUMMARY"
+      if [[ "$CONTINUE" -eq 0 ]]; then
+        echo "  stopping (use --continue-on-error to skip failures)" >&2
+        echo "" >> "$SUMMARY"; echo "Stopped early at $name (rc=$rc)." >> "$SUMMARY"
+        exit "$rc"
+      fi
+    fi
+  done < <(repos_tsv "${REPO_FILTER[@]}")
+
+  echo ""
+  echo "═══════════════════════════════════════════════════════"
+  echo "  aw-workspace run complete   passed=$passed failed=$failed"
+  [[ ${#failed_repos[@]} -gt 0 ]] && echo "  failed repos: ${failed_repos[*]}"
+  echo "  summary: $SUMMARY"
+  echo "═══════════════════════════════════════════════════════"
+  [[ $failed -eq 0 ]]
+}
+
+case "$CMD" in
+  status) cmd_status "$@" ;;
+  plan)   cmd_plan   "$@" ;;
+  run)    cmd_run    "$@" ;;
+  *)      echo "unknown command: $CMD (expected: status | plan | run)" >&2; exit 2 ;;
+esac

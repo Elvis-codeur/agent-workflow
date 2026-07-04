@@ -694,6 +694,77 @@ class TestOurScripts(RegressionTest):
             "aw-run rejected unknown provider but without the expected error message",
         )
 
+    def test_aw_run_deepseek_expands_to_pi(self):
+        """deepseek:<model> must be accepted and rendered as provider=pi model=deepseek/<model>."""
+        r = run(
+            ["bash", "scripts/aw-run", "--coder", "deepseek:deepseek-v4-pro", "--dry-run", "X"],
+            cwd=ROOT,
+        )
+        self.assertEqual(r.returncode, 0, f"aw-run rejected deepseek:deepseek-v4-pro\n{r.stderr[:300]}")
+        self.assertIn(
+            "pi / deepseek/deepseek-v4-pro", r.stdout,
+            "deepseek: shorthand did not expand to provider=pi model=deepseek/<model>\n"
+            "Check expand_deepseek() in scripts/aw-run",
+        )
+
+    def test_aw_run_rejects_bare_deepseek(self):
+        """deepseek: with an empty model must be rejected."""
+        r = run(["bash", "scripts/aw-run", "--coder", "deepseek:", "--dry-run", "X"], cwd=ROOT)
+        self.assertNotEqual(
+            r.returncode, 0,
+            "aw-run accepted an empty deepseek model — check_model() must reject it",
+        )
+
+    def test_aw_run_rejects_deepseek_with_slash(self):
+        """deepseek:foo/bar must be rejected — the deepseek/ prefix is added automatically."""
+        r = run(["bash", "scripts/aw-run", "--coder", "deepseek:foo/bar", "--dry-run", "X"], cwd=ROOT)
+        self.assertNotEqual(
+            r.returncode, 0,
+            "aw-run accepted a slashed deepseek model — check_model() must reject it",
+        )
+
+    def test_aw_run_kimi_expands_to_pi(self):
+        """kimi:<model> must be accepted and rendered as provider=pi model=moonshotai/<model>."""
+        r = run(
+            ["bash", "scripts/aw-run", "--coder", "kimi:kimi-k2-thinking", "--dry-run", "X"],
+            cwd=ROOT,
+        )
+        self.assertEqual(r.returncode, 0, f"aw-run rejected kimi:kimi-k2-thinking\n{r.stderr[:300]}")
+        self.assertIn(
+            "pi / moonshotai/kimi-k2-thinking", r.stdout,
+            "kimi: shorthand did not expand to provider=pi model=moonshotai/<model>\n"
+            "Check expand_pi_alias() in scripts/aw-run",
+        )
+
+    def test_aw_run_rejects_bare_kimi(self):
+        """kimi: with an empty model must be rejected."""
+        r = run(["bash", "scripts/aw-run", "--coder", "kimi:", "--dry-run", "X"], cwd=ROOT)
+        self.assertNotEqual(
+            r.returncode, 0,
+            "aw-run accepted an empty kimi model — check_model() must reject it",
+        )
+
+    def _validate_commit(self, subject):
+        return run([sys.executable, str(ROOT / "scripts" / "validate_commit_msg.py"),
+                    "--message", subject])
+
+    def test_validate_commit_accepts_full_type_set(self):
+        """The validator must accept the full house type set, including perf/ci/style and '!'."""
+        for subj in ["feat(api): add endpoint", "perf: tighten loop",
+                     "ci: cache deps", "refactor!: rename fields", "Merge branch 'x'"]:
+            r = self._validate_commit(subj)
+            self.assertEqual(r.returncode, 0, f"validator rejected valid subject: {subj!r}\n{r.stderr}")
+
+    def test_validate_commit_rejects_vague_summary(self):
+        """The validator must reject placeholder summaries (forbidden-vague-summary rule)."""
+        for subj in ["chore: update", "fix: misc changes", "wip"]:
+            r = self._validate_commit(subj)
+            self.assertNotEqual(r.returncode, 0, f"validator accepted vague subject: {subj!r}")
+
+    def test_validate_commit_rejects_unknown_type(self):
+        r = self._validate_commit("frobnicate: do a thing")
+        self.assertNotEqual(r.returncode, 0, "validator accepted an unknown commit type")
+
     def test_aw_run_all_dry_run(self):
         script = ROOT / "scripts" / "aw-run-all.sh"
         if not script.exists():
@@ -1121,6 +1192,117 @@ class TestSingleAgentMode(RegressionTest):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SUITE 8 — Multi-repo workspace
+# ══════════════════════════════════════════════════════════════════════════════
+class TestWorkspace(RegressionTest):
+    """Verify the multi-repo workspace layer: manifest template, the aw-workspace
+    orchestrator, and the single-progress.yaml epic discovery in aw-run-all.sh."""
+
+    def test_workspace_template_exists_and_parses(self):
+        import yaml as _yaml
+        tmpl = ROOT / "templates" / "workspace.example.yaml"
+        self.assertTrue(tmpl.exists(), "templates/workspace.example.yaml missing")
+        data = _yaml.safe_load(tmpl.read_text())
+        self.assertHas(
+            data, "repos",
+            breakage="workspace.example.yaml has no 'repos' list — aw-workspace has nothing to drive",
+            fix="Restore the repos: list in templates/workspace.example.yaml",
+        )
+        self.assertTrue(isinstance(data["repos"], list) and data["repos"],
+                        "workspace.example.yaml 'repos' must be a non-empty list")
+
+    def test_aw_workspace_exists_and_is_executable(self):
+        script = ROOT / "scripts" / "aw-workspace"
+        self.assertTrue(script.exists(), "scripts/aw-workspace missing")
+        self.assertTrue(os.access(script, os.X_OK), "scripts/aw-workspace is not executable")
+
+    def _make_repo(self, tmp, epics_yaml):
+        """Create a git repo dir with a single progress.yaml under tmp."""
+        repo = pathlib.Path(tmp) / "repo-a"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        (repo / "progress.yaml").write_text(epics_yaml)
+        return repo
+
+    def test_aw_run_all_reads_single_progress_yaml(self):
+        """aw-run-all.sh --dry-run must list a planned epic from a plain progress.yaml
+        and must exclude a 'done' epic (done == complete)."""
+        epics = textwrap.dedent("""\
+            project: repo-a
+            epics:
+              - id: WS-PLANNED
+                title: open epic
+                status: planned
+              - id: WS-DONE
+                title: finished epic
+                status: done
+        """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._make_repo(tmp, epics)
+            r = run(["bash", str(ROOT / "scripts" / "aw-run-all.sh"), "--dry-run"], cwd=repo)
+        self.assertEqual(r.returncode, 0, f"aw-run-all --dry-run failed:\n{r.stdout}\n{r.stderr}")
+        self.assertIn(
+            "WS-PLANNED", r.stdout,
+            "aw-run-all.sh did not discover a planned epic from a single progress.yaml\n"
+            "Check load_epics() loads progress.yaml in scripts/aw-run-all.sh",
+        )
+        self.assertNotIn(
+            "WS-DONE", r.stdout,
+            "aw-run-all.sh included a 'done' epic in the plan — done must map to complete\n"
+            "Check norm_status() in scripts/aw-run-all.sh",
+        )
+
+    def test_aw_configure_treats_done_as_complete(self):
+        """aw-configure.py must auto-skip implement for a 'done' epic in progress.yaml."""
+        epics = textwrap.dedent("""\
+            project: repo-a
+            epics:
+              - id: WS-DONE
+                title: finished epic
+                status: done
+        """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._make_repo(tmp, epics)
+            r = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "aw-configure.py"), "WS-DONE", "default", "[]"],
+                cwd=repo, capture_output=True, text=True,
+            )
+        out = json.loads(r.stdout.strip()) if r.stdout.strip() else {}
+        self.assertEqual(
+            out.get("skip_implement"), "true",
+            "aw-configure.py did not auto-skip implement for a 'done' epic\n"
+            "Check normalize_status() in scripts/aw-configure.py maps done->complete",
+        )
+
+    def test_aw_workspace_status_counts_done(self):
+        """aw-workspace status must run against a manifest and count a 'done' epic."""
+        epics = textwrap.dedent("""\
+            project: repo-a
+            epics:
+              - id: WS-DONE
+                title: finished epic
+                status: done
+        """)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._make_repo(tmp, epics)
+            manifest = pathlib.Path(tmp) / "workspace.yaml"
+            manifest.write_text(textwrap.dedent(f"""\
+                version: 1
+                workspace: t
+                repos:
+                  - name: repo-a
+                    path: {repo}
+                    progress: progress.yaml
+                    base_branch: main
+                    order: 10
+            """))
+            r = run(["bash", str(ROOT / "scripts" / "aw-workspace"),
+                     "-w", str(manifest), "status"], cwd=tmp)
+        self.assertEqual(r.returncode, 0, f"aw-workspace status failed:\n{r.stdout}\n{r.stderr}")
+        self.assertIn("repo-a", r.stdout, "aw-workspace status did not list the repo")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Runner
 # ══════════════════════════════════════════════════════════════════════════════
 SUITES = {
@@ -1129,6 +1311,7 @@ SUITES = {
     "providers":    [TestMultiProviderContract],
     "single-agent": [TestSingleAgentMode],
     "scripts":      [TestOurScripts],
+    "workspace":    [TestWorkspace],
 }
 
 

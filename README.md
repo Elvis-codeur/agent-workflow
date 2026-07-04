@@ -24,6 +24,36 @@ Safe to re-run — never overwrites files you have already customised.
 
 ---
 
+## Drive many repos from one place (workspaces)
+
+When several repos live side by side and you want one command to run the loop
+across all of them, install in **workspace mode** from the directory whose
+children are the repos:
+
+```bash
+git clone --depth=1 https://github.com/Elvis-codeur/agent-workflow.git /tmp/aw
+bash /tmp/aw/install.sh --workspace .
+rm -rf /tmp/aw
+```
+
+This scaffolds a `workspace.yaml` manifest + `scripts/aw-workspace` at the root,
+then installs the full toolchain into each repo the manifest lists. Then:
+
+```bash
+scripts/aw-workspace status      # epic-count table across all repos (no Archon needed)
+scripts/aw-workspace plan        # run order + open epics per repo
+scripts/aw-workspace run         # run the loop across every repo, sequentially
+scripts/aw-workspace run --repo myrepo --only BE-31   # one epic, one repo
+```
+
+Repos run sequentially in ascending `order`; each delegates to its own
+`scripts/aw-run-all.sh`, so worktrees, the DAG, and merges are unchanged.
+Each repo keeps its own `progress.yaml` — a single `progress.yaml` (with `done`)
+and scoped `progress.backend.yaml`/`progress.frontend.yaml` (with `complete`)
+are both accepted. Full guide: `docs/multi-repo-workspace.md`.
+
+---
+
 ## What gets installed
 
 ```
@@ -31,10 +61,13 @@ Safe to re-run — never overwrites files you have already customised.
 ├── AGENTS.md                           ← fill in your invariants + layout
 ├── CODEBASE-SUMMARY.md                 ← pre-digested facts for agents (~600 tokens)
 ├── CLAUDE.md                           ← thin Claude Code pointer (do not edit)
-├── .pre-commit-config.yaml             ← uncomment the language tracks you use
+├── .githooks/                          ← versioned git hooks (core.hooksPath)
+│   ├── commit-msg                      ← runs scripts/validate_commit_msg.py
+│   └── pre-commit                      ← runs check-invariants.sh (+ your linters)
 ├── .github/workflows/ci.yml            ← uncomment the CI jobs you need
 ├── scripts/
 │   ├── check-invariants.sh             ← add your architectural checks here
+│   ├── validate_commit_msg.py          ← Conventional Commits + no-vague-summary gate
 │   ├── aw-run                          ← master-loop launcher (Archon)
 │   ├── aw-configure.py                 ← phase-skip decision logic (configure node)
 │   ├── aw-ci-preflight.sh              ← fast CI gates run before commit
@@ -67,6 +100,7 @@ Safe to re-run — never overwrites files you have already customised.
         ├── fix-blocked/SKILL.md
         ├── aw-master-loop/SKILL.md
         ├── record-gotcha/SKILL.md
+        └── session-handoff/SKILL.md
         ├── commit/SKILL.md
         └── update-docs/SKILL.md
 .claude/skills      → docs/agent-rules/skills  (symlink)
@@ -80,7 +114,7 @@ Safe to re-run — never overwrites files you have already customised.
 
 1. **`AGENTS.md`** — add your project layout and architectural invariants.
 2. **`scripts/check-invariants.sh`** — add `check` calls for your project rules.
-3. **`.pre-commit-config.yaml` and `ci.yml`** — uncomment the language tracks you use.
+3. **`.githooks/pre-commit` and `ci.yml`** — uncomment the language tracks you use. Hooks are auto-activated (`core.hooksPath`); `commit-msg` enforces Conventional Commits via `validate_commit_msg.py`.
 4. **`scripts/aw-test-<scope>.sh`** — add project-specific test runners
    (e.g. `aw-test-backend.sh`, `aw-test-frontend.sh`) so the workflow runs
    the right tests for each epic scope.
@@ -136,13 +170,29 @@ scripts/aw-run \
 - tester: `pi:github-copilot/gpt-5.3-codex` — different model from coder = independent signal; code-optimised
 - master: `pi:github-copilot/gpt-5.2` — strong reasoning, used only for arbitration
 
-**All three providers are fully supported:**
+**All providers are fully supported:**
 
 | Provider | Format | Prerequisite |
 |---|---|---|
 | `pi` | `pi:<catalog-provider>/<model-id>` | Pi coding agent (default) |
 | `claude` | `claude:<alias-or-full-id>` | `curl -fsSL https://claude.ai/install.sh \| bash` |
 | `codex` | `codex:<model-id>` | `npm install -g @openai/codex` |
+| `deepseek` | `deepseek:<model-id>` (sugar for `pi:deepseek/<model-id>`) | DeepSeek configured in Pi/Archon (`DEEPSEEK_API_KEY`) |
+| `kimi` | `kimi:<model-id>` (sugar for `pi:moonshotai/<model-id>`) | Moonshot configured in Pi/Archon (`MOONSHOT_API_KEY`) |
+
+DeepSeek and Kimi have no agentic CLI of their own — they run through the Pi
+runtime, so `deepseek:deepseek-v4-pro` is shorthand for
+`pi:deepseek/deepseek-v4-pro` and `kimi:kimi-k2-thinking` for
+`pi:moonshotai/kimi-k2-thinking`. Pass the bare model id; the catalog prefix is
+added for you.
+
+```bash
+# DeepSeek for both roles
+scripts/aw-run --coder deepseek:deepseek-v4-pro --tester deepseek:deepseek-v4-flash BE-31
+
+# Kimi for both roles
+scripts/aw-run --coder kimi:kimi-for-coding --tester kimi:kimi-k2-thinking BE-31
+```
 
 **Phase-skip flags** (save tokens on repeat runs):
 ```bash
@@ -298,6 +348,17 @@ rather than relying on prose rules they may forget in long sessions.
 | `/record-gotcha` | "record this bug" | Writes to `docs/gotchas/` + epic's `gotchas:` list |
 | `/commit` | (called by `commit` node) | lint → typecheck → test → stage → conventional commit |
 | `/update-docs` | "update docs" | keep README, design docs, gotchas, and regression tests in sync |
+| `/session-handoff` | "log this", "update handoff", session end | appends to SESSION_YYYY-MM-DD.md + HANDOFF.md after every milestone |
+| `/archon` | "run/create an archon workflow", "set up archon" | drive + author Archon workflows, config, and `.archon/` setup |
+
+### Required companion: the Archon CLI
+
+The master loop **runs on** Archon — `aw-run` invokes `archon workflow run`.
+**The Archon CLI (≥ v0.3.10) must be installed alongside this workflow** in every
+repo that runs the loop: <https://github.com/coleam00/Archon>. The bundled
+`/archon` skill teaches agents to drive and author Archon workflows, but it is the
+CLI binary that actually executes them. `aw-run` hard-fails if `archon` is not in
+`PATH`; `install.sh` warns when it is missing.
 
 ---
 

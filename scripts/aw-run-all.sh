@@ -14,7 +14,9 @@
 #                                   (default: 1 = fully sequential)
 #   --continue-on-error             log a failed epic and keep going instead of
 #                                   stopping immediately (default: stop)
-#   --no-push                       skip `git push origin main` after each merge
+#   --no-push                       skip `git push` after each merge
+#   --base-branch BRANCH            branch to merge completed epics into
+#                                   (default: origin/HEAD, fallback main)
 #   --dry-run                       print the execution plan and exit
 #
 # Everything after -- is forwarded verbatim to `scripts/aw-run`, e.g.:
@@ -36,6 +38,7 @@ WORKERS=1
 CONTINUE_ON_ERROR=0
 PUSH=1
 DRY=0
+BASE_BRANCH=""
 EXTRA=()
 
 while [[ $# -gt 0 ]]; do
@@ -45,12 +48,22 @@ while [[ $# -gt 0 ]]; do
     --workers)           WORKERS="$2"; shift 2 ;;
     --continue-on-error) CONTINUE_ON_ERROR=1; shift ;;
     --no-push)           PUSH=0; shift ;;
+    --base-branch)       BASE_BRANCH="$2"; shift 2 ;;
     --dry-run)           DRY=1; shift ;;
     --)                  shift; EXTRA=("$@"); break ;;
     -*)                  echo "unknown flag: $1" >&2; exit 2 ;;
     *)                   echo "unexpected arg: $1" >&2; exit 2 ;;
   esac
 done
+
+# Base branch to merge completed epic branches into. Default: the repo's
+# remote default branch (origin/HEAD), falling back to `main`.
+if [[ -z "$BASE_BRANCH" ]]; then
+  # `|| true`: with `set -o pipefail`, a repo without origin/HEAD would make the
+  # git side of the pipe fail and abort the script under `set -e`.
+  BASE_BRANCH="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@' || true)"
+  BASE_BRANCH="${BASE_BRANCH:-main}"
+fi
 
 # ── Build execution plan (topological layers) ─────────────────────────────────
 PLAN="$(python3 - "$SCOPE" "$FROM_EPIC" <<'PY'
@@ -59,14 +72,29 @@ import sys, yaml, json
 scope_filter = sys.argv[1]   # "all" | "backend" | "frontend"
 from_epic    = sys.argv[2]   # "" | "EPIC-ID"
 
+# Status normalization: some repos use a single progress.yaml with the
+# vocab planned|in_progress|blocked|done|dropped. Map it onto the workflow's
+# canonical planned|in_progress|review|complete|blocked so the same plan
+# builder works for both. `done` == `complete`; `dropped` is terminal and,
+# like complete, simply never enters the OPEN set below.
+def norm_status(s):
+    return "complete" if s == "done" else s
+
 def load_epics(fname, scope):
     try: data = yaml.safe_load(open(fname))
     except FileNotFoundError: return {}
+    if not isinstance(data, dict): return {}
     key = next((k for k in data if "epics" in k or k == "epics"), None)
     if not key: return {}
-    return {ep["id"]: {**ep, "_scope": scope} for ep in data[key]}
+    return {
+        ep["id"]: {**ep, "status": norm_status(ep.get("status")), "_scope": scope}
+        for ep in data[key]
+    }
 
 epics = {}
+# The single progress.yaml is the common case across the scraper repos; load
+# it first so scoped files (if any) take precedence on id collision.
+epics.update(load_epics("progress.yaml",           "default"))
 epics.update(load_epics("progress.backend.yaml",  "backend"))
 epics.update(load_epics("progress.frontend.yaml",  "frontend"))
 
@@ -175,16 +203,16 @@ find_branch() {
   git branch --list --format='%(refname:short)' "*${safe}*" | head -1
 }
 
-# Merge a completed branch to main (with or without a live worktree),
+# Merge a completed branch to the base branch (with or without a live worktree),
 # push, and clean up the branch + worktree.
 merge_and_cleanup() {
   local epic_id="$1"
   local branch="$2"    # full git branch name
   local wt_path="$3"  # absolute path to worktree, or "" if already gone
 
-  echo "  → merging $branch to main"
+  echo "  → merging $branch to $BASE_BRANCH"
   local cur_branch; cur_branch="$(git branch --show-current)"
-  [[ "$cur_branch" != "main" ]] && git checkout main
+  [[ "$cur_branch" != "$BASE_BRANCH" ]] && git checkout "$BASE_BRANCH"
 
   # Stash any uncommitted WIP so the merge isn't blocked
   local stashed=0
@@ -203,8 +231,8 @@ Automated merge by aw-run-all.sh." 2>&1 | tail -3
   fi
 
   if [[ "$PUSH" -eq 1 ]]; then
-    echo "  → pushing main"
-    git push origin main 2>&1 | tail -2
+    echo "  → pushing $BASE_BRANCH"
+    git push origin "$BASE_BRANCH" 2>&1 | tail -2
   fi
 
   echo "  → cleaning up branch"
