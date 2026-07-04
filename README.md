@@ -100,6 +100,7 @@ are both accepted. Full guide: `docs/multi-repo-workspace.md`.
         ├── fix-blocked/SKILL.md
         ├── aw-master-loop/SKILL.md
         ├── record-gotcha/SKILL.md
+        └── session-handoff/SKILL.md
         ├── commit/SKILL.md
         └── update-docs/SKILL.md
 .claude/skills      → docs/agent-rules/skills  (symlink)
@@ -341,6 +342,7 @@ rather than relying on prose rules they may forget in long sessions.
 | `/record-gotcha` | "record this bug" | Writes to `docs/gotchas/` + epic's `gotchas:` list |
 | `/commit` | (called by `commit` node) | lint → typecheck → test → stage → conventional commit |
 | `/update-docs` | "update docs" | keep README, design docs, gotchas, and regression tests in sync |
+| `/session-handoff` | "log this", "update handoff", session end | appends to SESSION_YYYY-MM-DD.md + HANDOFF.md after every milestone |
 | `/archon` | "run/create an archon workflow", "set up archon" | drive + author Archon workflows, config, and `.archon/` setup |
 
 ### Required companion: the Archon CLI
